@@ -30,7 +30,7 @@ async function main() {
     }
     const resolvedLang: Lang = lang === "en" ? "en" : "zh";
     try {
-      const result = await handleChat(message, schema, resolvedLang);
+      const result = await handleChat(message, resolvedLang);
       res.json(result);
     } catch (err) {
       console.error("Chat error:", err);

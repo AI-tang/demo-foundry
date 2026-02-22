@@ -221,7 +221,7 @@ export default function ChatPanel() {
                       <strong>{t.graphqlQuery}</strong>
                       <pre className="chat-query-code">{msg.query}</pre>
                     </div>
-                    {msg.data && (
+                    {msg.data != null && (
                       <div className="chat-data-section">
                         <strong>{t.data}</strong>
                         {renderData(msg.data)}

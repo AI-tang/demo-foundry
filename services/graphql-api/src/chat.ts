@@ -1,7 +1,8 @@
 import OpenAI from "openai";
-import { graphql, GraphQLSchema } from "graphql";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const PORT = parseInt(process.env.PORT ?? "4000", 10);
 
 const SCHEMA_DESCRIPTION = `Available GraphQL Schema:
 
@@ -16,10 +17,17 @@ Types:
 - Shipment: id, mode, status, eta; relations: delivers -> Part
 - InventoryLot: id, location, onHand, reserved; relations: stores -> Part
 
+Filter syntax (IMPORTANT — this schema does NOT use _EQ suffix for equality):
+- Equality: field: "value"  (e.g. id: "SO1001", NOT id_EQ)
+- List match: field_IN: ["a","b"]
+- String: field_CONTAINS, field_STARTS_WITH, field_ENDS_WITH
+- Numeric comparison: field_GT, field_GTE, field_LT, field_LTE
+- Relation filters: relation_SOME, relation_ALL, relation_NONE (e.g. affectedBy_SOME: { severity_GTE: 1 })
+
 Example mappings:
 
 1. "What is the status of SO1001" / "SO1001 的状态是什么"
-   Query: { orders(where: { id_EQ: "SO1001" }) { id status statuses { system status updatedAt } } }
+   Query: { orders(where: { id: "SO1001" }) { id status statuses { system status updatedAt } } }
 
 2. "Which suppliers have risks" / "哪些供应商有风险"
    Query: { suppliers(where: { affectedBy_SOME: { severity_GTE: 1 } }) { id name affectedBy { id type severity date } } }
@@ -28,7 +36,7 @@ Example mappings:
    Query: { orders { id status produces { name } requires { name } statuses { system status } } }
 
 4. "What are the components of BOM-1001" / "BOM-1001 的组件有哪些"
-   Query: { parts(where: { id_EQ: "BOM-1001" }) { id name partType components { id name partType } } }
+   Query: { parts(where: { id: "BOM-1001" }) { id name partType components { id name partType } } }
 
 5. "Inventory status" / "库存情况"
    Query: { inventoryLots { id location onHand reserved stores { id name } } }
@@ -39,7 +47,9 @@ Example mappings:
 Constraints:
 - Only return JSON: { "query": "...", "variables": {} }
 - The query must be valid GraphQL
-- Do not include any explanation, only return JSON`;
+- NEVER use _EQ suffix for equality filters. Use the field name directly (e.g. id: "value")
+- Do not include any explanation, only return JSON
+- If the user's question is vague, ambiguous, or not directly about data, try your best to infer a relevant query. For example "有什么解决方法" (any solutions) after discussing risks → query risk events and suppliers. If you truly cannot map it to any query, return: { "answer": "<a helpful reply>", "query": "", "variables": {} }`;
 
 const SYSTEM_PROMPTS = {
   zh: `你是供应链 Control Tower 的数据分析助手。你的任务是将用户的自然语言问题转换为 GraphQL 查询。\n\n${SCHEMA_DESCRIPTION}`,
@@ -70,7 +80,6 @@ export type Lang = "zh" | "en";
 
 export async function handleChat(
   message: string,
-  schema: GraphQLSchema,
   lang: Lang = "zh",
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
@@ -92,19 +101,32 @@ export async function handleChat(
   try {
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
-    query = parsed.query;
+    query = parsed.query ?? "";
     variables = parsed.variables ?? {};
+    // GPT returned a direct answer instead of a query (vague question)
+    if (!query && parsed.answer) {
+      return { answer: parsed.answer, query: "", data: null };
+    }
   } catch {
     return { answer: errors.parseFailed, query: raw, data: null };
   }
 
-  // Step 2: Execute the GraphQL query locally
+  if (!query.trim()) {
+    return { answer: errors.parseFailed, query: raw, data: null };
+  }
+
+  // Step 2: Execute via our own GraphQL endpoint (preserves Neo4j context)
   let data: unknown;
   try {
-    const result = await graphql({ schema, source: query, variableValues: variables });
+    const res = await fetch(`http://localhost:${PORT}/graphql`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    const result = await res.json();
     if (result.errors && result.errors.length > 0) {
       return {
-        answer: `${errors.queryError}: ${result.errors.map((e) => e.message).join("; ")}`,
+        answer: `${errors.queryError}: ${result.errors.map((e: { message: string }) => e.message).join("; ")}`,
         query,
         data: null,
       };
