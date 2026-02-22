@@ -1,0 +1,27 @@
+{
+  "name": "graphql-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@apollo/server": "^4.11.3",
+    "@neo4j/graphql": "^5.9.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "graphql": "^16.10.0",
+    "neo4j-driver": "^5.28.1",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.17.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

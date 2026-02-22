@@ -1,0 +1,52 @@
+import { ApolloServer } from "@apollo/server";
+import { expressMiddleware } from "@apollo/server/express4";
+import { Neo4jGraphQL } from "@neo4j/graphql";
+import express from "express";
+import cors from "cors";
+import driver from "./neo4j.js";
+import { typeDefs } from "./schema.js";
+import { handleChat, type Lang } from "./chat.js";
+
+const PORT = parseInt(process.env.PORT ?? "4000", 10);
+
+async function main() {
+  const neoSchema = new Neo4jGraphQL({ typeDefs, driver });
+  const schema = await neoSchema.getSchema();
+
+  const server = new ApolloServer({ schema });
+  await server.start();
+
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+
+  app.use("/graphql", expressMiddleware(server));
+
+  app.post("/chat", async (req, res) => {
+    const { message, lang } = req.body;
+    if (!message || typeof message !== "string") {
+      res.status(400).json({ error: "message is required" });
+      return;
+    }
+    const resolvedLang: Lang = lang === "en" ? "en" : "zh";
+    try {
+      const result = await handleChat(message, schema, resolvedLang);
+      res.json(result);
+    } catch (err) {
+      console.error("Chat error:", err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Internal server error",
+      });
+    }
+  });
+
+  app.listen(PORT, () => {
+    console.log(`GraphQL API ready at http://localhost:${PORT}/graphql`);
+    console.log(`Chat endpoint ready at http://localhost:${PORT}/chat`);
+  });
+}
+
+main().catch((err) => {
+  console.error("Failed to start GraphQL server:", err);
+  process.exit(1);
+});
