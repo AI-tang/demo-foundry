@@ -1,10 +1,11 @@
-"""Agent-API – Multi-agent workflow: plan → analyze → simulate → execute."""
+"""Agent-API – Multi-agent workflow: plan → analyze → simulate → execute + sourcing."""
 
 from __future__ import annotations
 
+import math
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import httpx
@@ -125,6 +126,18 @@ class ExecuteResponse(BaseModel):
 # ────────────────────────────────────────────────────────────────────
 
 INTENT_KEYWORDS = {
+    "RFQ": [
+        "rfq", "候选", "寻源", "评分", "排序", "供应商评分",
+        "candidate", "sourcing", "scorecard", "ranking",
+    ],
+    "SINGLE_SOURCE": [
+        "单一来源", "single source", "single-source", "sole source",
+        "瓶颈件", "关键件",
+    ],
+    "CONSOLIDATE_PO": [
+        "moq", "合并采购", "合并下单", "分摊", "分配方案",
+        "consolidat", "allocation",
+    ],
     "CREATE_PO": [
         "create po", "new purchase order", "order from", "buy from",
         "采购", "下单", "新建采购单", "create purchase",
@@ -155,7 +168,19 @@ def plan(req: PlanRequest) -> PlanResponse:
     steps: list[PlanStep] = []
     step_num = 1
 
-    if intent in ("CREATE_PO", "EXPEDITE_SHIPMENT"):
+    if intent == "RFQ":
+        steps.append(PlanStep(step=step_num, role="sourcing", action="rfq-candidates",
+                              description="Score and rank supplier candidates for RFQ"))
+        step_num += 1
+        steps.append(PlanStep(step=step_num, role="action", action="execute",
+                              description="Optionally create PO from top recommendation"))
+    elif intent == "SINGLE_SOURCE":
+        steps.append(PlanStep(step=step_num, role="sourcing", action="single-source-parts",
+                              description="Identify single-source critical parts with risk"))
+    elif intent == "CONSOLIDATE_PO":
+        steps.append(PlanStep(step=step_num, role="sourcing", action="consolidate-po",
+                              description="Consolidate demand to meet MOQ with allocation plan"))
+    elif intent in ("CREATE_PO", "EXPEDITE_SHIPMENT"):
         steps.append(PlanStep(step=step_num, role="analyst", action="analyze",
                               description="Gather order/risk/inventory context"))
         step_num += 1
@@ -597,3 +622,529 @@ def _execute_expedite_shipment(req: ExecuteRequest) -> ExecuteResponse:
         raise HTTPException(500, f"EXPEDITE_SHIPMENT failed: {exc}")
     finally:
         conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Sprint 4 — Sourcing: RFQ Candidates, Single-Source, MOQ Consolidation
+# ════════════════════════════════════════════════════════════════════
+
+# ── Scoring weights by objective ──
+
+OBJECTIVE_WEIGHTS = {
+    "delivery-first":   {"lead": 0.40, "cost": 0.15, "risk": 0.25, "lane": 0.20},
+    "cost-first":       {"lead": 0.20, "cost": 0.40, "risk": 0.20, "lane": 0.20},
+    "resilience-first": {"lead": 0.15, "cost": 0.15, "risk": 0.50, "lane": 0.20},
+    "balanced":         {"lead": 0.25, "cost": 0.25, "risk": 0.25, "lane": 0.25},
+}
+
+QUAL_SCORE_MAP = {"Full": 90, "Conditional": 55, "Pending": 25, "Disqualified": 0}
+
+
+# ── Pydantic models ──
+
+class RfqRequest(BaseModel):
+    partId: str
+    factoryId: str = "F1"
+    qty: int = 1000
+    needByDate: Optional[str] = None  # ISO date string; defaults to +30 days
+    objective: str = "balanced"
+
+
+class CandidateBreakdown(BaseModel):
+    lead: float
+    cost: float
+    risk: float
+    lane: float
+    penalties: float
+
+
+class RfqCandidate(BaseModel):
+    rank: int
+    supplierId: str
+    supplierName: str
+    totalScore: float
+    breakdown: CandidateBreakdown
+    explanations: list[str]
+    recommendedActions: list[str]
+    hardFail: bool = False
+    hardFailReason: Optional[str] = None
+
+
+class RfqResponse(BaseModel):
+    partId: str
+    qty: int
+    objective: str
+    candidates: list[RfqCandidate]
+
+
+class SingleSourceRequest(BaseModel):
+    threshold: int = 1
+
+
+class SingleSourcePart(BaseModel):
+    partId: str
+    partName: str
+    supplierCount: int
+    suppliers: list[dict]
+    riskExplanation: str
+    recommendation: str
+
+
+class SingleSourceResponse(BaseModel):
+    parts: list[SingleSourcePart]
+
+
+class ConsolidateRequest(BaseModel):
+    partId: str
+    horizonDays: int = 30
+    policy: str = "priority"  # priority | earliest_due | risk_min
+
+
+class AllocationItem(BaseModel):
+    orderId: str
+    qty: int
+    needByDate: str
+    priority: int
+
+
+class ConsolidateResponse(BaseModel):
+    partId: str
+    totalDemand: int
+    consolidatedQty: int
+    supplierId: str
+    supplierName: str
+    moq: int
+    unitPrice: float
+    allocations: list[AllocationItem]
+    explanation: str
+
+
+# ── POST /agent/rfq-candidates ──
+
+@app.post("/agent/rfq-candidates", response_model=RfqResponse)
+def rfq_candidates(req: RfqRequest) -> RfqResponse:
+    weights = OBJECTIVE_WEIGHTS.get(req.objective, OBJECTIVE_WEIGHTS["balanced"])
+
+    if req.needByDate:
+        need_by = date.fromisoformat(req.needByDate)
+    else:
+        need_by = date.today() + __import__("datetime").timedelta(days=30)
+
+    days_available = max((need_by - date.today()).days, 1)
+
+    conn = _erp_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Get all suppliers for this part
+        cur.execute("""
+            SELECT sp.supplier_id, s.name AS supplier_name, s.approved,
+                   sp.lead_time_days, sp.moq, sp.capacity_per_week,
+                   sp.last_price, sp.qualification_level, sp.priority
+            FROM supplier_parts sp
+            JOIN suppliers s ON s.supplier_id = sp.supplier_id
+            WHERE sp.part_id = %s
+            ORDER BY sp.priority, sp.last_price
+        """, (req.partId,))
+        suppliers = cur.fetchall()
+
+        if not suppliers:
+            return RfqResponse(partId=req.partId, qty=req.qty,
+                               objective=req.objective, candidates=[])
+
+        # Get transport lanes for each supplier → factory
+        lane_map: dict[str, dict] = {}
+        for sp in suppliers:
+            cur.execute("""
+                SELECT mode, time_days, cost, reliability
+                FROM transport_lanes
+                WHERE supplier_id = %s AND factory_id = %s
+                ORDER BY time_days
+                LIMIT 1
+            """, (sp["supplier_id"], req.factoryId))
+            lane = cur.fetchone()
+            if lane:
+                lane_map[sp["supplier_id"]] = dict(lane)
+            else:
+                lane_map[sp["supplier_id"]] = {
+                    "mode": "Ocean", "time_days": 21, "cost": 1.00, "reliability": 0.85,
+                }
+
+        # Get existing quotes
+        cur.execute("""
+            SELECT supplier_id, price, valid_to, incoterms
+            FROM quotes
+            WHERE part_id = %s AND valid_to >= CURRENT_DATE
+            ORDER BY price
+        """, (req.partId,))
+        quote_map: dict[str, dict] = {}
+        for q in cur.fetchall():
+            if q["supplier_id"] not in quote_map:
+                quote_map[q["supplier_id"]] = dict(q)
+
+        # Count total qualified suppliers for this part (for risk calc)
+        total_suppliers = sum(1 for sp in suppliers
+                              if sp["qualification_level"] != "Disqualified"
+                              and sp["approved"])
+
+        cur.close()
+    finally:
+        conn.close()
+
+    # Find min cost for normalization
+    costs = []
+    for sp in suppliers:
+        lane = lane_map[sp["supplier_id"]]
+        quote = quote_map.get(sp["supplier_id"])
+        unit_price = float(quote["price"]) if quote else float(sp["last_price"])
+        total_cost = unit_price + float(lane["cost"])
+        costs.append(total_cost)
+    min_cost = min(costs) if costs else 1.0
+
+    # Score each candidate
+    raw_candidates: list[RfqCandidate] = []
+    for idx, sp in enumerate(suppliers):
+        sid = sp["supplier_id"]
+        sname = sp["supplier_name"]
+        lane = lane_map[sid]
+        quote = quote_map.get(sid)
+        explanations: list[str] = []
+        actions: list[str] = []
+        penalties = 0.0
+        hard_fail = False
+        hard_fail_reason = None
+
+        lead_days = int(sp["lead_time_days"])
+        transit_days = int(lane["time_days"])
+        total_delivery = lead_days + transit_days
+        unit_price = float(quote["price"]) if quote else float(sp["last_price"])
+        total_cost = unit_price + float(lane["cost"])
+        qual = sp["qualification_level"] or "Pending"
+        moq = int(sp["moq"]) if sp["moq"] else 100
+        capacity = int(sp["capacity_per_week"]) if sp["capacity_per_week"] else 5000
+        reliability = float(lane["reliability"])
+
+        # -- Lead time score (0-100) --
+        if total_delivery <= days_available:
+            margin = days_available - total_delivery
+            lead_score = min(100, 60 + margin * 2)
+        else:
+            overshoot = total_delivery - days_available
+            lead_score = max(0, 50 - overshoot * 5)
+        explanations.append(
+            f"Lead: {lead_days}d production + {transit_days}d {lane['mode']} "
+            f"= {total_delivery}d (need by {need_by}, {days_available - total_delivery}d margin)"
+        )
+
+        # Hard constraint: delivery impossible
+        if total_delivery > days_available * 1.5:
+            hard_fail = True
+            hard_fail_reason = (
+                f"Cannot deliver in time: {total_delivery}d vs {days_available}d available"
+            )
+
+        # -- Cost score (0-100) --
+        cost_score = round(100 * (min_cost / total_cost), 1) if total_cost > 0 else 0
+        price_src = "quoted" if quote else "catalog"
+        explanations.append(
+            f"Cost: ${unit_price:.2f}/unit ({price_src}) + "
+            f"${float(lane['cost']):.2f} shipping = ${total_cost:.2f}/unit "
+            f"({'+' if total_cost > min_cost else ''}{((total_cost - min_cost) / min_cost * 100):.0f}% vs cheapest)"
+        )
+
+        # -- Risk score (0-100) --
+        risk_base = QUAL_SCORE_MAP.get(qual, 30)
+        multi_source_bonus = 5 if total_suppliers >= 2 else 0
+        risk_score = min(100, risk_base + multi_source_bonus)
+        explanations.append(
+            f"Risk: qualification={qual} (base {risk_base}), "
+            f"{total_suppliers} qualified source(s)"
+        )
+
+        # Hard constraint: disqualified or not approved
+        if qual == "Disqualified":
+            hard_fail = True
+            hard_fail_reason = "Supplier is disqualified"
+        if not sp["approved"]:
+            hard_fail = True
+            hard_fail_reason = f"Supplier {sid} is not approved"
+
+        # -- Lane score (0-100) --
+        lane_score = round(reliability * 100, 1)
+        explanations.append(
+            f"Lane: {lane['mode']} to {req.factoryId}, "
+            f"reliability {reliability:.0%}, {transit_days}d"
+        )
+
+        # -- Penalties --
+        if req.qty < moq:
+            penalties -= 10
+            explanations.append(
+                f"PENALTY: MOQ={moq}, requested {req.qty}. "
+                f"Gap of {moq - req.qty} units."
+            )
+            actions.append(
+                f"Consider consolidating with other orders to meet MOQ of {moq}. "
+                f"Use /consolidate-po for allocation plan."
+            )
+
+        if req.qty > capacity * 2:
+            penalties -= 15
+            explanations.append(
+                f"PENALTY: weekly capacity={capacity}, "
+                f"order qty={req.qty} exceeds 2-week capacity"
+            )
+            actions.append("Consider splitting order across multiple suppliers")
+
+        if qual == "Conditional":
+            actions.append(f"Accelerate full qualification for {sid}")
+        elif qual == "Pending":
+            penalties -= 8
+            actions.append(
+                f"Supplier {sid} needs qualification — "
+                f"estimated 4-6 weeks to complete"
+            )
+
+        # -- Total weighted score --
+        total_score = round(
+            lead_score * weights["lead"]
+            + cost_score * weights["cost"]
+            + risk_score * weights["risk"]
+            + lane_score * weights["lane"]
+            + penalties,
+            2,
+        )
+
+        raw_candidates.append(RfqCandidate(
+            rank=0,
+            supplierId=sid,
+            supplierName=sname,
+            totalScore=total_score,
+            breakdown=CandidateBreakdown(
+                lead=round(lead_score * weights["lead"], 2),
+                cost=round(cost_score * weights["cost"], 2),
+                risk=round(risk_score * weights["risk"], 2),
+                lane=round(lane_score * weights["lane"], 2),
+                penalties=penalties,
+            ),
+            explanations=explanations,
+            recommendedActions=actions,
+            hardFail=hard_fail,
+            hardFailReason=hard_fail_reason,
+        ))
+
+    # Sort: non-hard-fail first, then by score desc
+    raw_candidates.sort(key=lambda c: (c.hardFail, -c.totalScore))
+    for i, c in enumerate(raw_candidates):
+        c.rank = i + 1
+
+    return RfqResponse(
+        partId=req.partId, qty=req.qty,
+        objective=req.objective, candidates=raw_candidates,
+    )
+
+
+# ── POST /agent/single-source-parts ──
+
+@app.post("/agent/single-source-parts", response_model=SingleSourceResponse)
+def single_source_parts(req: SingleSourceRequest) -> SingleSourceResponse:
+    conn = _erp_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT p.part_id, p.name AS part_name,
+                   COUNT(DISTINCT CASE WHEN s.approved AND sp.qualification_level IN ('Full','Conditional')
+                         THEN sp.supplier_id END) AS qualified_count,
+                   COUNT(DISTINCT sp.supplier_id) AS total_count
+            FROM parts p
+            JOIN supplier_parts sp ON sp.part_id = p.part_id
+            JOIN suppliers s ON s.supplier_id = sp.supplier_id
+            GROUP BY p.part_id, p.name
+            HAVING COUNT(DISTINCT CASE WHEN s.approved AND sp.qualification_level IN ('Full','Conditional')
+                         THEN sp.supplier_id END) <= %s
+            ORDER BY COUNT(DISTINCT CASE WHEN s.approved AND sp.qualification_level IN ('Full','Conditional')
+                         THEN sp.supplier_id END),
+                     p.part_id
+        """, (req.threshold,))
+        parts_rows = cur.fetchall()
+
+        result: list[SingleSourcePart] = []
+        for row in parts_rows:
+            pid = row["part_id"]
+            # Get supplier details
+            cur.execute("""
+                SELECT sp.supplier_id, s.name, sp.qualification_level, s.approved,
+                       sp.lead_time_days, sp.last_price, sp.capacity_per_week
+                FROM supplier_parts sp
+                JOIN suppliers s ON s.supplier_id = sp.supplier_id
+                WHERE sp.part_id = %s
+                ORDER BY sp.priority
+            """, (pid,))
+            suppliers = [dict(r) for r in cur.fetchall()]
+
+            # Count demand orders for this part
+            cur.execute(
+                "SELECT COUNT(DISTINCT order_id) AS order_count FROM demand WHERE part_id = %s",
+                (pid,),
+            )
+            demand_row = cur.fetchone()
+            order_count = int(demand_row["order_count"]) if demand_row else 0
+
+            qualified = [s for s in suppliers
+                         if s["approved"] and s["qualification_level"] in ("Full", "Conditional")]
+            q_count = int(row["qualified_count"])
+
+            # Risk explanation
+            if q_count == 0:
+                risk = (f"CRITICAL: No qualified supplier for {pid}. "
+                        f"{len(suppliers)} supplier(s) exist but none are fully qualified/approved.")
+            elif q_count == 1:
+                sole = qualified[0]
+                risk = (f"HIGH: Single qualified source {sole['supplier_id']} ({sole['name']}), "
+                        f"qual={sole['qualification_level']}. "
+                        f"Used by {order_count} order(s). Any disruption = line stop.")
+            else:
+                risk = (f"MODERATE: Only {q_count} qualified sources. "
+                        f"Used by {order_count} order(s).")
+
+            # Recommendation
+            pending = [s for s in suppliers if s["qualification_level"] == "Pending"]
+            if pending:
+                rec = (f"Accelerate qualification of {', '.join(s['supplier_id'] for s in pending)} "
+                       f"to develop second source. "
+                       f"Estimated 4-6 weeks for full qualification.")
+            elif q_count <= 1:
+                rec = (f"Initiate RFQ with alternative suppliers. "
+                       f"Consider regional diversification to reduce logistics risk.")
+            else:
+                rec = "Monitor existing supply base; consider qualifying a third source."
+
+            result.append(SingleSourcePart(
+                partId=pid,
+                partName=row["part_name"],
+                supplierCount=q_count,
+                suppliers=[{
+                    "supplierId": s["supplier_id"],
+                    "name": s["name"],
+                    "qualification": s["qualification_level"],
+                    "approved": s["approved"],
+                } for s in suppliers],
+                riskExplanation=risk,
+                recommendation=rec,
+            ))
+
+        cur.close()
+    finally:
+        conn.close()
+
+    return SingleSourceResponse(parts=result)
+
+
+# ── POST /agent/consolidate-po ──
+
+@app.post("/agent/consolidate-po", response_model=ConsolidateResponse)
+def consolidate_po(req: ConsolidateRequest) -> ConsolidateResponse:
+    conn = _erp_conn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Get demand within horizon
+        cur.execute("""
+            SELECT order_id, qty, need_by_date, priority, factory_id
+            FROM demand
+            WHERE part_id = %s
+              AND need_by_date <= CURRENT_DATE + (%s || ' days')::INTERVAL
+            ORDER BY priority, need_by_date
+        """, (req.partId, str(req.horizonDays)))
+        demands = cur.fetchall()
+
+        if not demands:
+            raise HTTPException(404, f"No demand found for {req.partId} within {req.horizonDays} days")
+
+        total_demand = sum(int(d["qty"]) for d in demands)
+
+        # Get best supplier (priority 1, Full qualification, approved)
+        cur.execute("""
+            SELECT sp.supplier_id, s.name, sp.moq, sp.last_price,
+                   sp.capacity_per_week, sp.qualification_level
+            FROM supplier_parts sp
+            JOIN suppliers s ON s.supplier_id = sp.supplier_id
+            WHERE sp.part_id = %s AND s.approved = true
+                  AND sp.qualification_level IN ('Full', 'Conditional')
+            ORDER BY sp.priority, sp.last_price
+            LIMIT 1
+        """, (req.partId,))
+        best_supplier = cur.fetchone()
+
+        if not best_supplier:
+            raise HTTPException(404, f"No qualified supplier found for {req.partId}")
+
+        moq = int(best_supplier["moq"])
+        consolidated_qty = max(total_demand, moq)
+        # Round up to MOQ multiple
+        if moq > 0 and consolidated_qty % moq != 0:
+            consolidated_qty = math.ceil(consolidated_qty / moq) * moq
+
+        # Sort demands by policy
+        sorted_demands = list(demands)
+        if req.policy == "earliest_due":
+            sorted_demands.sort(key=lambda d: d["need_by_date"])
+        elif req.policy == "risk_min":
+            sorted_demands.sort(key=lambda d: (d["priority"], d["need_by_date"]))
+        else:  # priority (default)
+            sorted_demands.sort(key=lambda d: (d["priority"], d["need_by_date"]))
+
+        # Build allocation plan
+        remaining = consolidated_qty
+        allocations: list[AllocationItem] = []
+        for d in sorted_demands:
+            alloc_qty = min(int(d["qty"]), remaining)
+            if alloc_qty <= 0:
+                continue
+            allocations.append(AllocationItem(
+                orderId=d["order_id"],
+                qty=alloc_qty,
+                needByDate=str(d["need_by_date"]),
+                priority=int(d["priority"]),
+            ))
+            remaining -= alloc_qty
+
+        # Explanation
+        surplus = consolidated_qty - total_demand
+        explanation_parts = [
+            f"Total demand: {total_demand} units across {len(demands)} order(s) "
+            f"within {req.horizonDays}-day horizon.",
+        ]
+        if total_demand < moq:
+            explanation_parts.append(
+                f"Individual demand ({total_demand}) below MOQ ({moq}). "
+                f"Consolidated order raised to {consolidated_qty} units."
+            )
+        if surplus > 0:
+            explanation_parts.append(
+                f"Surplus of {surplus} units can buffer safety stock."
+            )
+        explanation_parts.append(
+            f"Best supplier: {best_supplier['supplier_id']} ({best_supplier['name']}), "
+            f"${float(best_supplier['last_price']):.2f}/unit, "
+            f"qual={best_supplier['qualification_level']}."
+        )
+        explanation_parts.append(
+            f"Allocation policy: {req.policy}."
+        )
+
+        cur.close()
+    finally:
+        conn.close()
+
+    return ConsolidateResponse(
+        partId=req.partId,
+        totalDemand=total_demand,
+        consolidatedQty=consolidated_qty,
+        supplierId=best_supplier["supplier_id"],
+        supplierName=best_supplier["name"],
+        moq=moq,
+        unitPrice=float(best_supplier["last_price"]),
+        allocations=allocations,
+        explanation=" ".join(explanation_parts),
+    )

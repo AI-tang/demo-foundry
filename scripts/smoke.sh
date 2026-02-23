@@ -206,4 +206,64 @@ else
   echo "    FAIL: EXPEDITE_SHIPMENT did not succeed!" && exit 1
 fi
 
+echo "==> Sprint 4: GraphQL rfqCandidates ..."
+RFQ_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"query":"{ rfqCandidates(partId:\"P1A\", qty:1000, objective:\"balanced\") { partId candidates { rank supplierId totalScore explanations } } }"}' \
+  http://localhost:4000/graphql)
+RFQ_OK=$(echo "$RFQ_RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cands = d.get('data',{}).get('rfqCandidates',{}).get('candidates',[])
+has_expl = any(len(c.get('explanations',[])) > 0 for c in cands)
+print('1' if len(cands) >= 2 and has_expl else '0')
+" 2>/dev/null || echo "0")
+if [ "$RFQ_OK" = "1" ]; then
+  echo "    rfqCandidates returned candidates with explanations."
+else
+  echo "    FAIL: rfqCandidates did not return expected data!" && exit 1
+fi
+
+echo "==> Sprint 4: GraphQL singleSourceParts ..."
+SSP_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"query":"{ singleSourceParts(threshold:1) { parts { partId supplierCount riskExplanation } } }"}' \
+  http://localhost:4000/graphql)
+SSP_OK=$(echo "$SSP_RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+parts = d.get('data',{}).get('singleSourceParts',{}).get('parts',[])
+print('1' if len(parts) >= 1 else '0')
+" 2>/dev/null || echo "0")
+if [ "$SSP_OK" = "1" ]; then
+  echo "    singleSourceParts returned single-source parts."
+else
+  echo "    FAIL: singleSourceParts returned empty!" && exit 1
+fi
+
+echo "==> Sprint 4: Agent-API rfq-candidates direct ..."
+ARFQ_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"partId":"MCU-001","factoryId":"F1","qty":1000,"objective":"delivery-first"}' \
+  http://localhost:7200/agent/rfq-candidates)
+ARFQ_OK=$(echo "$ARFQ_RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cands = d.get('candidates',[])
+print('1' if len(cands) >= 1 else '0')
+" 2>/dev/null || echo "0")
+if [ "$ARFQ_OK" = "1" ]; then
+  echo "    rfq-candidates for MCU-001 returned candidates."
+else
+  echo "    FAIL: rfq-candidates for MCU-001 returned no candidates!" && exit 1
+fi
+
+echo "==> Sprint 4: Data scale verification ..."
+SUPPLIER_COUNT=$(docker compose exec -T postgres_erp psql -U demo -d erp -tAc "SELECT count(*) FROM suppliers;")
+PART_COUNT=$(docker compose exec -T postgres_erp psql -U demo -d erp -tAc "SELECT count(*) FROM parts;")
+DEMAND_COUNT=$(docker compose exec -T postgres_erp psql -U demo -d erp -tAc "SELECT count(*) FROM demand;")
+echo "    Suppliers: $SUPPLIER_COUNT, Parts: $PART_COUNT, Demand records: $DEMAND_COUNT"
+if [ "$SUPPLIER_COUNT" -ge 10 ] && [ "$PART_COUNT" -ge 200 ] && [ "$DEMAND_COUNT" -ge 100 ]; then
+  echo "    Scale requirements met."
+else
+  echo "    FAIL: Scale requirements not met (need >=10 suppliers, >=200 parts, >=100 demands)" && exit 1
+fi
+
 echo "==> All smoke tests passed."

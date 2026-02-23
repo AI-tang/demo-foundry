@@ -7,6 +7,7 @@ import cors from "cors";
 import driver from "./neo4j.js";
 import { typeDefs } from "./schema.js";
 import { simulationTypeDefs, simulationResolvers } from "./simulation.js";
+import { sourcingTypeDefs, sourcingResolvers } from "./sourcing.js";
 import { handleChat, type Lang } from "./chat.js";
 
 const PORT = parseInt(process.env.PORT ?? "4000", 10);
@@ -23,8 +24,14 @@ async function main() {
     resolvers: simulationResolvers,
   });
 
-  // 3. Merge both into a single Apollo schema
-  const schema = mergeSchemas({ schemas: [neo4jSchema, simSchema] });
+  // 3. Sourcing schema (RFQ candidates, single-source, MOQ consolidation)
+  const srcSchema = makeExecutableSchema({
+    typeDefs: sourcingTypeDefs,
+    resolvers: sourcingResolvers,
+  });
+
+  // 4. Merge all into a single Apollo schema
+  const schema = mergeSchemas({ schemas: [neo4jSchema, simSchema, srcSchema] });
 
   const server = new ApolloServer({ schema });
   await server.start();

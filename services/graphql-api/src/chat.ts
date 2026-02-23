@@ -109,6 +109,13 @@ Example mappings:
 
 IMPORTANT: For custom @cypher queries (ordersAtRisk, missingParts, lineStopForecast, traceQuality, ecoImpact, reconcile), ONLY request scalar fields returned by the Cypher RETURN clause. Do NOT request nested relationship fields — they will fail.
 
+Sourcing Queries (Sprint 4):
+- rfqCandidates(partId, factoryId, qty, needByDate, objective): RFQ候选供应商排序评分 / RFQ candidate ranking with explainable scores
+  objective: delivery-first / cost-first / resilience-first / balanced
+- singleSourceParts(threshold): 单一来源关键件清单 / Single-source critical parts list
+- consolidatePO(partId, horizonDays, policy): MOQ合并采购分配方案 / MOQ consolidation with allocation plan
+  policy: priority / earliest_due / risk_min
+
 Constraints:
 - Only return JSON: { "query": "...", "variables": {} }
 - The query must be valid GraphQL
@@ -326,6 +333,196 @@ async function handleWhatIf(
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Sourcing intent detection (Sprint 4)
+// ────────────────────────────────────────────────────────────────────
+
+const SOURCING_INTENT_PROMPT = {
+  zh: `你是供应链采购寻源意图检测器。分析用户消息，判断是否属于以下采购寻源场景。
+
+支持的寻源操作：
+1. RFQ_CANDIDATES — 用户想做RFQ、寻源评分、供应商候选排序、供应商评分卡
+   关键词：RFQ、做RFQ、寻源、候选、评分、排序、供应商评分卡、交期优先、成本优先、风险优先
+2. SINGLE_SOURCE — 用户想查找单一来源/瓶颈件/关键件
+   关键词：单一来源、瓶颈件、关键件、single source
+3. CONSOLIDATE_PO — 用户想合并采购、MOQ分摊、分配方案
+   关键词：MOQ、合并采购、合并下单、分摊、分配
+4. SUPPLIER_CHECK — 用户想检查某供应商能否供应某零件
+   关键词：能不能下单、能不能供、缺什么、资质
+
+提取槽位（缺失时返回null）：
+- partId: 零件编号（如 P1A、MCU-001）
+- supplierId: 供应商编号（如 S6）
+- factoryId: 工厂编号（如 F1）
+- qty: 数量
+- needByDate: 交期（ISO日期格式）
+- objective: delivery-first / cost-first / resilience-first / balanced
+- horizonDays: 合并采购时间范围天数
+- policy: priority / earliest_due / risk_min
+- threshold: 单一来源阈值
+
+返回 JSON: { "isSourcing": true, "type": "RFQ_CANDIDATES", "slots": { ... } }
+如果不是寻源意图: { "isSourcing": false }`,
+
+  en: `You are a supply chain sourcing intent detector. Analyze the user's message.
+
+Supported sourcing actions:
+1. RFQ_CANDIDATES — user wants RFQ candidate scoring, supplier ranking, scorecard
+   Keywords: RFQ, candidates, sourcing, ranking, scorecard, delivery-first, cost-first, resilience-first
+2. SINGLE_SOURCE — user wants to find single-source / bottleneck parts
+   Keywords: single source, sole source, bottleneck, critical parts
+3. CONSOLIDATE_PO — user wants MOQ consolidation / allocation plan
+   Keywords: MOQ, consolidate, allocation, combine orders
+4. SUPPLIER_CHECK — user wants to check if a supplier can supply a part
+   Keywords: can supplier, qualified, what's missing, capability
+
+Extract slots (null if missing):
+- partId, supplierId, factoryId, qty, needByDate (ISO date), objective, horizonDays, policy, threshold
+
+Return JSON: { "isSourcing": true, "type": "RFQ_CANDIDATES", "slots": { ... } }
+If not sourcing: { "isSourcing": false }`,
+};
+
+interface SourcingIntent {
+  isSourcing: boolean;
+  type?: "RFQ_CANDIDATES" | "SINGLE_SOURCE" | "CONSOLIDATE_PO" | "SUPPLIER_CHECK";
+  slots?: Record<string, string | number | null>;
+}
+
+async function detectSourcingIntent(message: string, lang: Lang): Promise<SourcingIntent> {
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: SOURCING_INTENT_PROMPT[lang] },
+      { role: "user", content: message },
+    ],
+    temperature: 0,
+  });
+  const raw = completion.choices[0]?.message?.content ?? "";
+  try {
+    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    return JSON.parse(cleaned) as SourcingIntent;
+  } catch {
+    return { isSourcing: false };
+  }
+}
+
+async function handleSourcingIntent(
+  message: string,
+  lang: Lang,
+  intent: SourcingIntent,
+): Promise<{ answer: string; query: string; data: unknown }> {
+  const errors = ERROR_MESSAGES[lang];
+  const slots = intent.slots ?? {};
+
+  let endpoint: string;
+  let body: Record<string, unknown>;
+  let queryDesc: string;
+
+  switch (intent.type) {
+    case "RFQ_CANDIDATES":
+      endpoint = "/agent/rfq-candidates";
+      body = {
+        partId: slots.partId ?? "P1A",
+        factoryId: slots.factoryId ?? "F1",
+        qty: slots.qty ? Number(slots.qty) : 1000,
+        objective: slots.objective ?? "balanced",
+      };
+      if (slots.needByDate) body.needByDate = slots.needByDate;
+      queryDesc = `rfqCandidates(partId:"${body.partId}", qty:${body.qty}, objective:"${body.objective}")`;
+      break;
+
+    case "SINGLE_SOURCE":
+      endpoint = "/agent/single-source-parts";
+      body = { threshold: slots.threshold ? Number(slots.threshold) : 1 };
+      queryDesc = `singleSourceParts(threshold:${body.threshold})`;
+      break;
+
+    case "CONSOLIDATE_PO":
+      endpoint = "/agent/consolidate-po";
+      body = {
+        partId: slots.partId ?? "P1A",
+        horizonDays: slots.horizonDays ? Number(slots.horizonDays) : 30,
+        policy: slots.policy ?? "priority",
+      };
+      queryDesc = `consolidatePO(partId:"${body.partId}")`;
+      break;
+
+    case "SUPPLIER_CHECK": {
+      // Check if supplier can supply the part — use rfq-candidates filtered to 1 supplier
+      endpoint = "/agent/rfq-candidates";
+      body = {
+        partId: slots.partId ?? "P1A",
+        factoryId: slots.factoryId ?? "F1",
+        qty: slots.qty ? Number(slots.qty) : 1000,
+        objective: "balanced",
+      };
+      queryDesc = `rfqCandidates for supplier check ${slots.supplierId ?? "?"}`;
+      break;
+    }
+
+    default:
+      return { answer: errors.parseFailed, query: "", data: null };
+  }
+
+  let data: unknown;
+  try {
+    const res = await fetch(`${AGENT_API_URL}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return {
+        answer: `${errors.execFailed}: agent-api ${res.status} ${text}`,
+        query: queryDesc,
+        data: null,
+      };
+    }
+    data = await res.json();
+  } catch (err) {
+    return {
+      answer: `${errors.execFailed}: ${err instanceof Error ? err.message : String(err)}`,
+      query: queryDesc,
+      data: null,
+    };
+  }
+
+  // For SUPPLIER_CHECK, filter results to the specific supplier
+  if (intent.type === "SUPPLIER_CHECK" && slots.supplierId && data && typeof data === "object") {
+    const rfqData = data as { candidates?: Array<Record<string, unknown>> };
+    const match = rfqData.candidates?.find(
+      (c) => c.supplierId === slots.supplierId,
+    );
+    if (match) {
+      data = { supplierCheck: match, allCandidates: rfqData.candidates?.length ?? 0 };
+    } else {
+      data = {
+        supplierCheck: null,
+        reason: `Supplier ${slots.supplierId} does not supply part ${slots.partId ?? "?"}`,
+        allCandidates: rfqData.candidates?.length ?? 0,
+      };
+    }
+  }
+
+  // Summarize
+  const summaryCompletion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: SUMMARY_PROMPTS[lang] },
+      {
+        role: "user",
+        content: `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "寻源分析结果" : "Sourcing analysis results"}:\n${JSON.stringify(data, null, 2)}`,
+      },
+    ],
+    temperature: 0.3,
+  });
+
+  const answer = summaryCompletion.choices[0]?.message?.content ?? errors.noSummary;
+  return { answer, query: queryDesc, data };
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Action intent detection & execution (Sprint 3)
 // ────────────────────────────────────────────────────────────────────
 
@@ -454,13 +651,19 @@ export async function handleChat(
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
 
-  // Step 0a: Detect action intent (CREATE_PO / EXPEDITE_SHIPMENT)
+  // Step 0a: Detect sourcing intent (RFQ / single-source / MOQ consolidation)
+  const sourcingIntent = await detectSourcingIntent(message, lang);
+  if (sourcingIntent.isSourcing && sourcingIntent.type) {
+    return handleSourcingIntent(message, lang, sourcingIntent);
+  }
+
+  // Step 0b: Detect action intent (CREATE_PO / EXPEDITE_SHIPMENT)
   const actionIntent = await detectActionIntent(message, lang);
   if (actionIntent.isAction && actionIntent.action) {
     return handleActionIntent(message, lang, actionIntent);
   }
 
-  // Step 0b: Detect what-if intent
+  // Step 0c: Detect what-if intent
   const whatIf = await detectWhatIf(message, lang);
   if (whatIf.isWhatIf && whatIf.type) {
     return handleWhatIf(message, lang, whatIf);

@@ -60,6 +60,10 @@ seed:
 	$(COMPOSE) exec -T neo4j cypher-shell -u neo4j -p demo12345 -f /import/seed_sprint2.cypher
 	@echo "==> Seeding Sprint 3 schema (audit + action_requests) ..."
 	$(COMPOSE) exec -T postgres_erp psql -U demo -d erp -f /docker-entrypoint-initdb.d/04_sprint3_schema.sql
+	@echo "==> Seeding Sprint 4 data (sourcing: suppliers, parts, demand, quotes, transport_lanes) ..."
+	$(COMPOSE) exec -T postgres_erp psql -U demo -d erp -f /docker-entrypoint-initdb.d/05_sprint4_schema.sql
+	@echo "==> Seeding Sprint 4 Neo4j (sourcing graph extensions) ..."
+	$(COMPOSE) exec -T neo4j cypher-shell -u neo4j -p demo12345 -f /import/seed_sprint4.cypher
 	@echo "==> (Optional) Create a demo Debezium connector ..."
 	@echo "    Run: bash scripts/register_debezium_connectors.sh"
 
