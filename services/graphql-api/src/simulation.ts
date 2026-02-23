@@ -8,6 +8,7 @@
 import driver from "./neo4j.js";
 
 const TWIN_SIM_URL = process.env.TWIN_SIM_URL ?? "http://twin-sim:7100";
+const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://agent-api:7200";
 
 // ── Extra typeDefs (merged into the Apollo schema) ──────────────────
 
@@ -52,6 +53,16 @@ export const simulationTypeDefs = /* GraphQL */ `
     blastRadius(orderId: String, supplierId: String, partId: String): BlastRadius!
   }
 
+  type ExecuteResult {
+    success: Boolean!
+    message: String!
+    auditEventId: String
+    actionRequestId: String
+    details: JSON
+  }
+
+  scalar JSON
+
   type Mutation {
     simulateSwitchSupplier(
       orderId: String!
@@ -60,10 +71,35 @@ export const simulationTypeDefs = /* GraphQL */ `
       objective: String
       constraints: String
     ): SimulationResult!
+
+    createPurchaseOrderRecommendation(
+      partId: String!
+      supplierId: String!
+      qty: Int!
+      orderId: String
+    ): ExecuteResult!
+
+    expediteShipment(
+      poId: String!
+      newMode: String
+    ): ExecuteResult!
   }
 `;
 
 // ── Resolvers ───────────────────────────────────────────────────────
+
+async function callAgentApi(path: string, body: Record<string, unknown>) {
+  const res = await fetch(`${AGENT_API_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`agent-api ${path} ${res.status}: ${text}`);
+  }
+  return res.json();
+}
 
 async function callTwinSim(path: string, body: Record<string, unknown>) {
   const res = await fetch(`${TWIN_SIM_URL}${path}`, {
@@ -130,6 +166,32 @@ export const simulationResolvers = {
         ...data,
         blastRadius: { ...data.blastRadius, paths: mapBlastPaths(data.blastRadius?.paths) },
       };
+    },
+
+    createPurchaseOrderRecommendation: async (
+      _: unknown,
+      args: { partId: string; supplierId: string; qty: number; orderId?: string },
+    ) => {
+      return callAgentApi("/agent/execute", {
+        action: "CREATE_PO",
+        partId: args.partId,
+        supplierId: args.supplierId,
+        qty: args.qty,
+        orderId: args.orderId ?? null,
+        actor: "graphql-mutation",
+      });
+    },
+
+    expediteShipment: async (
+      _: unknown,
+      args: { poId: string; newMode?: string },
+    ) => {
+      return callAgentApi("/agent/execute", {
+        action: "EXPEDITE_SHIPMENT",
+        poId: args.poId,
+        newMode: args.newMode ?? "Air",
+        actor: "graphql-mutation",
+      });
     },
   },
 };

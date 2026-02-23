@@ -4,6 +4,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const PORT = parseInt(process.env.PORT ?? "4000", 10);
 const TWIN_SIM_URL = process.env.TWIN_SIM_URL ?? "http://twin-sim:7100";
+const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://agent-api:7200";
 
 // ────────────────────────────────────────────────────────────────────
 // Schema description for NL→GraphQL
@@ -325,6 +326,125 @@ async function handleWhatIf(
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Action intent detection & execution (Sprint 3)
+// ────────────────────────────────────────────────────────────────────
+
+const ACTION_INTENT_PROMPT = {
+  zh: `你是供应链行动意图检测器。分析用户的消息，判断是否要求执行具体操作。
+
+支持的操作：
+1. CREATE_PO — 用户想创建采购单（关键词：创建PO、下采购单、采购、买）
+2. EXPEDITE_SHIPMENT — 用户想加急发货（关键词：加急、加速、空运发货、改运输方式）
+
+提取以下槽位（缺失时返回null）：
+- partId: 零件编号（如 P1A）
+- supplierId: 供应商编号（如 S2）
+- qty: 数量（整数）
+- orderId: 订单编号（如 SO1001）
+- poId: 采购单编号（如 PO-ERP-2001）
+- newMode: 运输方式（Air/Ocean）
+
+返回 JSON: { "isAction": true, "action": "CREATE_PO", "slots": { ... } }
+如果不是操作意图: { "isAction": false }`,
+
+  en: `You are a supply chain action intent detector. Analyze the user's message.
+
+Supported actions:
+1. CREATE_PO — user wants to create a purchase order (keywords: create PO, purchase order, buy, order from)
+2. EXPEDITE_SHIPMENT — user wants to expedite shipment (keywords: expedite, speed up, air freight, rush)
+
+Extract slots (null if missing):
+- partId, supplierId, qty, orderId, poId, newMode
+
+Return JSON: { "isAction": true, "action": "CREATE_PO", "slots": { ... } }
+If not an action intent: { "isAction": false }`,
+};
+
+interface ActionIntent {
+  isAction: boolean;
+  action?: "CREATE_PO" | "EXPEDITE_SHIPMENT";
+  slots?: Record<string, string | number | null>;
+}
+
+async function detectActionIntent(message: string, lang: Lang): Promise<ActionIntent> {
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: ACTION_INTENT_PROMPT[lang] },
+      { role: "user", content: message },
+    ],
+    temperature: 0,
+  });
+  const raw = completion.choices[0]?.message?.content ?? "";
+  try {
+    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    return JSON.parse(cleaned) as ActionIntent;
+  } catch {
+    return { isAction: false };
+  }
+}
+
+async function handleActionIntent(
+  message: string,
+  lang: Lang,
+  intent: ActionIntent,
+): Promise<{ answer: string; query: string; data: unknown }> {
+  const errors = ERROR_MESSAGES[lang];
+  const slots = intent.slots ?? {};
+
+  const body: Record<string, unknown> = {
+    action: intent.action,
+    partId: slots.partId ?? null,
+    supplierId: slots.supplierId ?? null,
+    qty: slots.qty ? Number(slots.qty) : null,
+    orderId: slots.orderId ?? null,
+    poId: slots.poId ?? null,
+    newMode: slots.newMode ?? null,
+    actor: "chat-user",
+  };
+
+  let data: unknown;
+  try {
+    const res = await fetch(`${AGENT_API_URL}/agent/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return {
+        answer: `${errors.execFailed}: agent-api ${res.status} ${text}`,
+        query: `POST /agent/execute ${intent.action}`,
+        data: null,
+      };
+    }
+    data = await res.json();
+  } catch (err) {
+    return {
+      answer: `${errors.execFailed}: ${err instanceof Error ? err.message : String(err)}`,
+      query: `POST /agent/execute ${intent.action}`,
+      data: null,
+    };
+  }
+
+  // Summarize
+  const summaryCompletion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: SUMMARY_PROMPTS[lang] },
+      {
+        role: "user",
+        content: `${lang === "zh" ? "用户请求" : "User request"}: ${message}\n\n${lang === "zh" ? "执行结果" : "Execution result"}:\n${JSON.stringify(data, null, 2)}`,
+      },
+    ],
+    temperature: 0.3,
+  });
+
+  const answer = summaryCompletion.choices[0]?.message?.content ?? errors.noSummary;
+  return { answer, query: `POST /agent/execute ${intent.action}`, data };
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Main chat handler
 // ────────────────────────────────────────────────────────────────────
 
@@ -334,7 +454,13 @@ export async function handleChat(
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
 
-  // Step 0: Detect what-if intent
+  // Step 0a: Detect action intent (CREATE_PO / EXPEDITE_SHIPMENT)
+  const actionIntent = await detectActionIntent(message, lang);
+  if (actionIntent.isAction && actionIntent.action) {
+    return handleActionIntent(message, lang, actionIntent);
+  }
+
+  // Step 0b: Detect what-if intent
   const whatIf = await detectWhatIf(message, lang);
   if (whatIf.isWhatIf && whatIf.type) {
     return handleWhatIf(message, lang, whatIf);

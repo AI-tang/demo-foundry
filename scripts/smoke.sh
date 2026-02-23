@@ -159,4 +159,51 @@ else
   echo "    FAIL: blastRadius did not return expected data!" && exit 1
 fi
 
+echo "==> Agent-API healthz ..."
+AGENT_CODE=$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:7200/healthz)
+if [ "$AGENT_CODE" = "200" ]; then
+  echo "    Agent-API healthy (HTTP $AGENT_CODE)"
+else
+  echo "    FAIL: Agent-API returned HTTP $AGENT_CODE" && exit 1
+fi
+
+echo "==> Agent-API: CREATE_PO ..."
+PO_BEFORE=$(docker compose exec -T postgres_erp psql -U demo -d erp -tAc "SELECT count(*) FROM purchase_orders;")
+CREATE_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"action":"CREATE_PO","partId":"P1A","supplierId":"S2","qty":100,"orderId":"SO1001","actor":"smoke-test"}' \
+  http://localhost:7200/agent/execute)
+CREATE_OK=$(echo "$CREATE_RESP" | python3 -c "import sys,json; print('1' if json.load(sys.stdin).get('success') else '0')" 2>/dev/null || echo "0")
+if [ "$CREATE_OK" = "1" ]; then
+  echo "    CREATE_PO succeeded."
+else
+  echo "    FAIL: CREATE_PO did not succeed!" && exit 1
+fi
+
+echo "==> Verify: purchase_orders count increased ..."
+PO_AFTER=$(docker compose exec -T postgres_erp psql -U demo -d erp -tAc "SELECT count(*) FROM purchase_orders;")
+if [ "$PO_AFTER" -gt "$PO_BEFORE" ]; then
+  echo "    purchase_orders: $PO_BEFORE → $PO_AFTER"
+else
+  echo "    FAIL: purchase_orders count did not increase ($PO_BEFORE → $PO_AFTER)" && exit 1
+fi
+
+echo "==> Verify: audit_events ≥ 1 ..."
+AUDIT_ROWS=$(docker compose exec -T postgres_erp psql -U demo -d erp -tAc "SELECT count(*) FROM audit_events;")
+if [ "$AUDIT_ROWS" -ge 1 ]; then
+  echo "    audit_events: $AUDIT_ROWS row(s)"
+else
+  echo "    FAIL: audit_events has $AUDIT_ROWS rows (expected ≥1)" && exit 1
+fi
+
+echo "==> Agent-API: EXPEDITE_SHIPMENT ..."
+EXPED_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"action":"EXPEDITE_SHIPMENT","poId":"PO-ERP-2001","newMode":"Air","actor":"smoke-test"}' \
+  http://localhost:7200/agent/execute)
+EXPED_OK=$(echo "$EXPED_RESP" | python3 -c "import sys,json; print('1' if json.load(sys.stdin).get('success') else '0')" 2>/dev/null || echo "0")
+if [ "$EXPED_OK" = "1" ]; then
+  echo "    EXPEDITE_SHIPMENT succeeded."
+else
+  echo "    FAIL: EXPEDITE_SHIPMENT did not succeed!" && exit 1
+fi
+
 echo "==> All smoke tests passed."

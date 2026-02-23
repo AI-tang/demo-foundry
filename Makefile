@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 COMPOSE ?= docker compose
 
-.PHONY: up down ps logs seed gen-data init-minio init-iceberg smoke sim-smoke reset
+.PHONY: up down ps logs seed gen-data init-minio init-iceberg smoke sim-smoke reset demo-sprint3
 
 up:
 	$(COMPOSE) up -d
@@ -58,6 +58,8 @@ seed:
 	$(MAKE) init-iceberg
 	@echo "==> Seeding Sprint 2 data (Twin-Sim extensions) ..."
 	$(COMPOSE) exec -T neo4j cypher-shell -u neo4j -p demo12345 -f /import/seed_sprint2.cypher
+	@echo "==> Seeding Sprint 3 schema (audit + action_requests) ..."
+	$(COMPOSE) exec -T postgres_erp psql -U demo -d erp -f /docker-entrypoint-initdb.d/04_sprint3_schema.sql
 	@echo "==> (Optional) Create a demo Debezium connector ..."
 	@echo "    Run: bash scripts/register_debezium_connectors.sh"
 
@@ -66,6 +68,9 @@ smoke:
 
 sim-smoke:
 	bash scripts/sim_smoke.sh
+
+demo-sprint3:
+	bash scripts/run_demo_sprint3.sh
 
 reset:
 	$(COMPOSE) down -v
