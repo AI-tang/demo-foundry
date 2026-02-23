@@ -1,17 +1,30 @@
 import { ApolloServer } from "@apollo/server";
 import { expressMiddleware } from "@apollo/server/express4";
 import { Neo4jGraphQL } from "@neo4j/graphql";
+import { mergeSchemas } from "@graphql-tools/schema";
 import express from "express";
 import cors from "cors";
 import driver from "./neo4j.js";
 import { typeDefs } from "./schema.js";
+import { simulationTypeDefs, simulationResolvers } from "./simulation.js";
 import { handleChat, type Lang } from "./chat.js";
 
 const PORT = parseInt(process.env.PORT ?? "4000", 10);
 
 async function main() {
+  // 1. Neo4j-backed schema (auto-generated CRUD + @cypher queries)
   const neoSchema = new Neo4jGraphQL({ typeDefs, driver });
-  const schema = await neoSchema.getSchema();
+  const neo4jSchema = await neoSchema.getSchema();
+
+  // 2. Simulation schema (custom resolvers calling twin-sim service)
+  const { makeExecutableSchema } = await import("@graphql-tools/schema");
+  const simSchema = makeExecutableSchema({
+    typeDefs: simulationTypeDefs,
+    resolvers: simulationResolvers,
+  });
+
+  // 3. Merge both into a single Apollo schema
+  const schema = mergeSchemas({ schemas: [neo4jSchema, simSchema] });
 
   const server = new ApolloServer({ schema });
   await server.start();

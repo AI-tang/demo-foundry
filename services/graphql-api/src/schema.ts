@@ -12,11 +12,16 @@ export const typeDefs = /* GraphQL */ `
     supplies: [Part!]! @relationship(type: "SUPPLIES", direction: OUT, properties: "SuppliesProperties")
     alternativeTo: [Supplier!]! @relationship(type: "ALTERNATIVE_TO", direction: OUT)
     affectedBy: [RiskEvent!]! @relationship(type: "AFFECTS", direction: IN)
+    lanes: [TransportLane!]! @relationship(type: "HAS_LANE", direction: OUT)
   }
 
   type SuppliesProperties @relationshipProperties {
     priority: Int
     leadTimeDays: Int
+    moq: Int
+    capacity: Int
+    lastPrice: Float
+    qualificationLevel: String
   }
 
   type Part {
@@ -75,7 +80,27 @@ export const typeDefs = /* GraphQL */ `
     location: String!
     onHand: Int!
     reserved: Int!
+    safetyStock: Int
     stores: [Part!]! @relationship(type: "STORES", direction: OUT)
+  }
+
+  type TransportLane {
+    id: String!
+    fromNode: String!
+    toNode: String!
+    mode: String!
+    timeDays: Int!
+    cost: Float!
+    reliability: Float!
+    laneTo: [Factory!]! @relationship(type: "LANE_TO", direction: OUT)
+  }
+
+  type QualityHold {
+    id: String!
+    supplierId: String!
+    partId: String!
+    holdDays: Int!
+    reason: String
   }
 
   type DefectEvent {

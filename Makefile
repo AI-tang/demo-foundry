@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 COMPOSE ?= docker compose
 
-.PHONY: up down ps logs seed gen-data init-minio init-iceberg smoke reset
+.PHONY: up down ps logs seed gen-data init-minio init-iceberg smoke sim-smoke reset
 
 up:
 	$(COMPOSE) up -d
@@ -56,11 +56,16 @@ seed:
 	$(MAKE) init-minio
 	@echo "==> Creating Iceberg tables ..."
 	$(MAKE) init-iceberg
+	@echo "==> Seeding Sprint 2 data (Twin-Sim extensions) ..."
+	$(COMPOSE) exec -T neo4j cypher-shell -u neo4j -p demo12345 -f /import/seed_sprint2.cypher
 	@echo "==> (Optional) Create a demo Debezium connector ..."
 	@echo "    Run: bash scripts/register_debezium_connectors.sh"
 
 smoke:
 	bash scripts/smoke.sh
+
+sim-smoke:
+	bash scripts/sim_smoke.sh
 
 reset:
 	$(COMPOSE) down -v

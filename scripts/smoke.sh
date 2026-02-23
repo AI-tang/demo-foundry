@@ -100,4 +100,63 @@ else
   echo "    FAIL: Chat '供应商S1停产影响范围' returned no data!" && exit 1
 fi
 
+echo "==> Twin-Sim healthz ..."
+TS_CODE=$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:7100/healthz)
+if [ "$TS_CODE" = "200" ]; then
+  echo "    Twin-Sim healthy (HTTP $TS_CODE)"
+else
+  echo "    FAIL: Twin-Sim returned HTTP $TS_CODE" && exit 1
+fi
+
+echo "==> Twin-Sim: simulate switch-supplier ..."
+SIM_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"orderId":"SO1001","partId":"P1A","toSupplierId":"S2"}' \
+  http://localhost:7100/simulate/switch-supplier)
+SIM_OK=$(echo "$SIM_RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+sc = d.get('scenarios', [])
+rec = d.get('recommended', '')
+print('1' if len(sc) == 3 and rec else '0')
+" 2>/dev/null || echo "0")
+if [ "$SIM_OK" = "1" ]; then
+  echo "    switch-supplier returned 3 scenarios with recommendation."
+else
+  echo "    FAIL: switch-supplier did not return expected structure!" && exit 1
+fi
+
+echo "==> GraphQL: simulateSwitchSupplier mutation ..."
+GQL_SIM=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"query":"mutation { simulateSwitchSupplier(orderId:\"SO1001\", partId:\"P1A\", toSupplierId:\"S2\") { scenarios { label description eta_delta_days cost_delta_pct line_stop_risk quality_risk } recommended assumptions } }"}' \
+  http://localhost:4000/graphql)
+GQL_SIM_OK=$(echo "$GQL_SIM" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+sim = d.get('data', {}).get('simulateSwitchSupplier', {})
+sc = sim.get('scenarios', [])
+rec = sim.get('recommended', '')
+print('1' if len(sc) == 3 and rec else '0')
+" 2>/dev/null || echo "0")
+if [ "$GQL_SIM_OK" = "1" ]; then
+  echo "    simulateSwitchSupplier returned 3 scenarios, recommended=$(echo "$GQL_SIM" | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['simulateSwitchSupplier']['recommended'])" 2>/dev/null)"
+else
+  echo "    FAIL: simulateSwitchSupplier did not return expected structure!" && exit 1
+fi
+
+echo "==> GraphQL: blastRadius query ..."
+BR_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"query":"{ blastRadius(orderId:\"SO1001\") { impactedParts { id } impactedFactories { id } } }"}' \
+  http://localhost:4000/graphql)
+BR_OK=$(echo "$BR_RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+br = d.get('data', {}).get('blastRadius', {})
+print('1' if br.get('impactedParts') is not None else '0')
+" 2>/dev/null || echo "0")
+if [ "$BR_OK" = "1" ]; then
+  echo "    blastRadius returned impact data."
+else
+  echo "    FAIL: blastRadius did not return expected data!" && exit 1
+fi
+
 echo "==> All smoke tests passed."
