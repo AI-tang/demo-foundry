@@ -42,4 +42,62 @@ else
   echo "    jq not found; skipping Trino statement parsing. Trino UI should still be reachable at http://localhost:8080"
 fi
 
-echo "✅ Smoke tests passed."
+echo "==> Nessie catalog sanity..."
+curl -fsS http://localhost:19120/api/v2/config | jq -r '.defaultBranch // "OK"' 2>/dev/null || echo "    Nessie reachable (jq unavailable for detailed check)"
+
+echo "==> Iceberg tables sanity..."
+if command -v jq >/dev/null 2>&1; then
+  run_trino "SELECT count(*) FROM iceberg.warehouse.orders"
+  run_trino "SELECT count(*) FROM iceberg.warehouse.supply_chain"
+  echo "    Iceberg tables queryable via Trino."
+fi
+
+echo "==> GraphQL API sanity..."
+GRAPHQL_RESP=$(curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"query":"{ orders { id status } }"}' \
+  http://localhost:4000/graphql)
+echo "    GraphQL response: $(echo "$GRAPHQL_RESP" | head -c 200)"
+
+echo "==> Control Tower UI sanity..."
+HTTP_CODE=$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:3000/)
+if [ "$HTTP_CODE" = "200" ]; then
+  echo "    Control Tower UI serving at http://localhost:3000 (HTTP $HTTP_CODE)"
+else
+  echo "    WARNING: Control Tower UI returned HTTP $HTTP_CODE"
+fi
+
+echo "==> Scenario API: ordersAtRisk ..."
+RISK_RESP=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"query":"{ ordersAtRisk { id status } }"}' \
+  http://localhost:4000/graphql)
+RISK_COUNT=$(echo "$RISK_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',{}).get('ordersAtRisk',[])))" 2>/dev/null || echo "0")
+if [ "$RISK_COUNT" -gt 0 ]; then
+  echo "    ordersAtRisk returned $RISK_COUNT orders."
+else
+  echo "    FAIL: ordersAtRisk returned empty!" && exit 1
+fi
+
+echo "==> Chat: 风险订单Top10 ..."
+CHAT1=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"message":"风险订单Top10","lang":"zh"}' \
+  http://localhost:4000/chat)
+CHAT1_OK=$(echo "$CHAT1" | python3 -c "import sys,json; d=json.load(sys.stdin); print('1' if d.get('data') else '0')" 2>/dev/null || echo "0")
+if [ "$CHAT1_OK" = "1" ]; then
+  echo "    Chat '风险订单Top10' returned data."
+else
+  echo "    FAIL: Chat '风险订单Top10' returned no data!" && exit 1
+fi
+
+echo "==> Chat: 供应商S1停产影响范围 ..."
+CHAT2=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  --data '{"message":"供应商S1停产影响范围","lang":"zh"}' \
+  http://localhost:4000/chat)
+CHAT2_OK=$(echo "$CHAT2" | python3 -c "import sys,json; d=json.load(sys.stdin); print('1' if d.get('data') else '0')" 2>/dev/null || echo "0")
+if [ "$CHAT2_OK" = "1" ]; then
+  echo "    Chat '供应商S1停产影响范围' returned data."
+else
+  echo "    FAIL: Chat '供应商S1停产影响范围' returned no data!" && exit 1
+fi
+
+echo "==> All smoke tests passed."

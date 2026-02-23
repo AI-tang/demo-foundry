@@ -1,0 +1,16 @@
+{
+  "id": "C",
+  "name": "质量追溯",
+  "description": "Defect D001 found on part P015; trace upstream assemblies, products, orders, and suppliers",
+  "inject": {
+    "orders_at_risk": [],
+    "parts_shortage": [],
+    "risk_events": [],
+    "defects": [
+      {"id": "D001", "description": "表面裂纹缺陷 / Surface crack defect on P015", "severity": 4, "part": "P015", "date": "2026-02-13"}
+    ],
+    "ecos": [],
+    "status_conflicts": [],
+    "quality_hold_orders": ["SO0008", "SO0015", "SO0031"]
+  }
+}

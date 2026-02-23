@@ -16,6 +16,16 @@ Types:
 - RiskEvent: id, type, severity, date; relations: affects -> Supplier
 - Shipment: id, mode, status, eta; relations: delivers -> Part
 - InventoryLot: id, location, onHand, reserved; relations: stores -> Part
+- DefectEvent: id, description, severity, date; relations: affectsPart <- Part (HAS_DEFECT)
+- ECO: id, description, status, date; relations: affectedParts -> Part (ECO_AFFECTS), replacementPart -> Part (ECO_REPLACES_WITH)
+
+Custom Analysis Queries (场景分析):
+- ordersAtRisk: 返回所有有风险的订单 / Returns all at-risk orders
+- missingParts: 返回缺料零件 / Returns parts with zero available inventory
+- lineStopForecast: 预测可能导致停线的订单 / Predicts orders that may cause line stops
+- traceQuality(defectId: String!): 根据缺陷ID追溯影响 / Trace impact by defect ID
+- ecoImpact(ecoId: String!): 根据ECO编号查影响范围 / Check impact scope by ECO ID
+- reconcile: 返回跨系统状态不一致的订单 / Returns orders with cross-system status conflicts
 
 Filter syntax (IMPORTANT — this schema does NOT use _EQ suffix for equality):
 - Equality: field: "value"  (e.g. id: "SO1001", NOT id_EQ)
@@ -43,6 +53,31 @@ Example mappings:
 
 6. "In-transit shipments" / "在途运输"
    Query: { shipments { id mode status eta delivers { id name } } }
+
+7. "风险订单Top10" / "At-risk orders top 10"
+   Query: { ordersAtRisk { id status } }
+   Note: ordersAtRisk is a @cypher query — only request scalar fields (id, status), NOT nested relations.
+
+8. "缺料零件" / "Missing parts"
+   Query: { missingParts { id name partType } }
+   Note: missingParts is a @cypher query — only request scalar fields (id, name, partType), NOT nested relations.
+
+9. "追溯缺陷 D001" / "Trace defect D001"
+   Query: { traceQuality(defectId: "D001") { id description severity } }
+   Note: traceQuality is a @cypher query — only request scalar fields.
+
+10. "ECO-1 影响哪些订单" / "ECO-1 impact"
+    Query: { ecoImpact(ecoId: "ECO-1") { id description status } }
+    Note: ecoImpact is a @cypher query — only request scalar fields.
+
+11. "跨系统状态冲突" / "Cross-system conflicts"
+    Query: { reconcile { id status } }
+    Note: reconcile is a @cypher query — only request scalar fields (id, status), NOT nested relations.
+
+12. "如果S1停产会影响什么" / "What if S1 shuts down"
+    Query: { suppliers(where: { id: "S1" }) { id name supplies { id name parentOf { id name } } } }
+
+IMPORTANT: For custom @cypher queries (ordersAtRisk, missingParts, lineStopForecast, traceQuality, ecoImpact, reconcile), ONLY request scalar fields returned by the Cypher RETURN clause. Do NOT request nested relationship fields — they will fail.
 
 Constraints:
 - Only return JSON: { "query": "...", "variables": {} }

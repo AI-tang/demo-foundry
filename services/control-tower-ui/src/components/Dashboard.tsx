@@ -15,15 +15,15 @@ export default function Dashboard({ tab }: Props) {
       return (
         <div className="overview-grid">
           <section>
-            <h2>Orders</h2>
+            <h2>订单</h2>
             <OrdersTable />
           </section>
           <section>
-            <h2>Risk Alerts</h2>
+            <h2>风险预警</h2>
             <RiskAlerts />
           </section>
           <section>
-            <h2>System Status</h2>
+            <h2>系统状态</h2>
             <SystemStatusGrid />
           </section>
         </div>

@@ -1,0 +1,23 @@
+{
+  "id": "D",
+  "name": "工程变更",
+  "description": "ECO-1: Part P030 needs replacement with P030-REV2; impacts multiple products and orders",
+  "inject": {
+    "orders_at_risk": [],
+    "parts_shortage": [],
+    "risk_events": [],
+    "defects": [],
+    "ecos": [
+      {
+        "id": "ECO-1",
+        "description": "P030 材料规格升级 / Material spec upgrade for P030",
+        "status": "Pending",
+        "date": "2026-02-14",
+        "affected_part": "P030",
+        "replacement_part_id": "P030-REV2",
+        "replacement_part_name": "P030 改良版 / P030 Revised"
+      }
+    ],
+    "status_conflicts": []
+  }
+}

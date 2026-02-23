@@ -1,0 +1,19 @@
+{
+  "id": "A",
+  "name": "缺料",
+  "description": "Orders SO0005/SO0012/SO0023 require parts with zero inventory; supplier S3 delayed",
+  "inject": {
+    "orders_at_risk": ["SO0005", "SO0012", "SO0023"],
+    "parts_shortage": [
+      {"part": "P042", "on_hand": 0, "reserved": 0},
+      {"part": "P078", "on_hand": 0, "reserved": 0},
+      {"part": "P103", "on_hand": 0, "reserved": 0}
+    ],
+    "risk_events": [
+      {"id": "R-A1", "type": "SupplierDelay", "severity": 4, "supplier": "S3", "date": "2026-02-12"}
+    ],
+    "defects": [],
+    "ecos": [],
+    "status_conflicts": []
+  }
+}

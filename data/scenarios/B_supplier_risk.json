@@ -1,0 +1,19 @@
+{
+  "id": "B",
+  "name": "供应商风险",
+  "description": "Supplier S1 hit by FactoryShutdown (severity 5); all parts from S1 at risk; S2 is alternative",
+  "inject": {
+    "orders_at_risk": [],
+    "parts_shortage": [],
+    "risk_events": [
+      {"id": "R-B1", "type": "FactoryShutdown", "severity": 5, "supplier": "S1", "date": "2026-02-10"},
+      {"id": "R-B2", "type": "LogisticsDisruption", "severity": 3, "supplier": "S1", "date": "2026-02-11"}
+    ],
+    "defects": [],
+    "ecos": [],
+    "status_conflicts": [],
+    "alternative_suppliers": [
+      {"from": "S1", "to": "S2"}
+    ]
+  }
+}

@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect } from "react";
 
-type Lang = "zh" | "en";
-
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -9,72 +7,23 @@ interface ChatMessage {
   data?: unknown;
 }
 
-const i18n = {
-  zh: {
-    title: "对话查询",
-    subtitle: "用自然语言查询供应链数据，例如：",
-    placeholder: "输入你的问题...",
-    send: "发送",
-    you: "你",
-    assistant: "AI 助手",
-    thinking: "思考中...",
-    showDetails: "查看查询详情",
-    hideDetails: "收起查询详情",
-    graphqlQuery: "GraphQL 查询:",
-    data: "数据:",
-    moreRows: (n: number) => `... 还有 ${n} 条记录`,
-    errorPrefix: "错误",
-    networkError: "网络错误",
-    fetchFailed: "请求失败",
-    cannotConnect: "无法连接到服务器",
-    quickQuestions: [
-      "显示所有订单",
-      "哪些供应商有风险",
-      "库存情况",
-      "在途运输",
-      "SO1001 的状态是什么",
-      "BOM-1001 的组件有哪些",
-    ],
-  },
-  en: {
-    title: "Chat Query",
-    subtitle: "Query supply chain data using natural language, e.g.:",
-    placeholder: "Type your question...",
-    send: "Send",
-    you: "You",
-    assistant: "AI Assistant",
-    thinking: "Thinking...",
-    showDetails: "Show query details",
-    hideDetails: "Hide query details",
-    graphqlQuery: "GraphQL Query:",
-    data: "Data:",
-    moreRows: (n: number) => `... ${n} more rows`,
-    errorPrefix: "Error",
-    networkError: "Network error",
-    fetchFailed: "Request failed",
-    cannotConnect: "Cannot connect to server",
-    quickQuestions: [
-      "Show all orders",
-      "Which suppliers have risks",
-      "Inventory status",
-      "In-transit shipments",
-      "What is the status of SO1001",
-      "What are the components of BOM-1001",
-    ],
-  },
-};
+const QUICK_QUESTIONS = [
+  "显示所有订单",
+  "哪些供应商有风险",
+  "库存情况",
+  "在途运输",
+  "SO1001 的状态是什么",
+  "BOM-1001 的组件有哪些",
+];
 
 const CHAT_API = "http://localhost:4000/chat";
 
 export default function ChatPanel() {
-  const [lang, setLang] = useState<Lang>("zh");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  const t = i18n[lang];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -92,14 +41,14 @@ export default function ChatPanel() {
       const res = await fetch(CHAT_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, lang }),
+        body: JSON.stringify({ message: text, lang: "zh" }),
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: t.fetchFailed }));
+        const err = await res.json().catch(() => ({ error: "请求失败" }));
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: `${t.errorPrefix}: ${err.error ?? res.statusText}` },
+          { role: "assistant", content: `错误: ${err.error ?? res.statusText}` },
         ]);
         return;
       }
@@ -119,7 +68,7 @@ export default function ChatPanel() {
         ...prev,
         {
           role: "assistant",
-          content: `${t.networkError}: ${err instanceof Error ? err.message : t.cannotConnect}`,
+          content: `网络错误: ${err instanceof Error ? err.message : "无法连接到服务器"}`,
         },
       ]);
     } finally {
@@ -162,7 +111,7 @@ export default function ChatPanel() {
           {rows.length > 20 && (
             <tr>
               <td colSpan={columns.length} style={{ textAlign: "center", color: "var(--text-muted)" }}>
-                {t.moreRows(rows.length - 20)}
+                ... 还有 {rows.length - 20} 条记录
               </td>
             </tr>
           )}
@@ -173,27 +122,12 @@ export default function ChatPanel() {
 
   return (
     <div className="chat-panel">
-      <div className="chat-lang-bar">
-        <button
-          className={`chat-lang-btn ${lang === "zh" ? "active" : ""}`}
-          onClick={() => setLang("zh")}
-        >
-          中文
-        </button>
-        <button
-          className={`chat-lang-btn ${lang === "en" ? "active" : ""}`}
-          onClick={() => setLang("en")}
-        >
-          EN
-        </button>
-      </div>
-
       {messages.length === 0 && (
         <div className="chat-welcome">
-          <h2>{t.title}</h2>
-          <p>{t.subtitle}</p>
+          <h2>对话查询</h2>
+          <p>用自然语言查询供应链数据，例如：</p>
           <div className="chat-quick-buttons">
-            {t.quickQuestions.map((q) => (
+            {QUICK_QUESTIONS.map((q) => (
               <button key={q} className="chat-quick-btn" onClick={() => sendMessage(q)}>
                 {q}
               </button>
@@ -205,7 +139,7 @@ export default function ChatPanel() {
       <div className="chat-messages">
         {messages.map((msg, i) => (
           <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
-            <div className="chat-msg-label">{msg.role === "user" ? t.you : t.assistant}</div>
+            <div className="chat-msg-label">{msg.role === "user" ? "你" : "AI 助手"}</div>
             <div className="chat-msg-content">{msg.content}</div>
             {msg.query && (
               <div className="chat-details">
@@ -213,17 +147,17 @@ export default function ChatPanel() {
                   className="chat-toggle-btn"
                   onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
                 >
-                  {expandedIdx === i ? t.hideDetails : t.showDetails}
+                  {expandedIdx === i ? "收起查询详情" : "查看查询详情"}
                 </button>
                 {expandedIdx === i && (
                   <div className="chat-detail-body">
                     <div className="chat-query-section">
-                      <strong>{t.graphqlQuery}</strong>
+                      <strong>GraphQL 查询:</strong>
                       <pre className="chat-query-code">{msg.query}</pre>
                     </div>
                     {msg.data != null && (
                       <div className="chat-data-section">
-                        <strong>{t.data}</strong>
+                        <strong>数据:</strong>
                         {renderData(msg.data)}
                       </div>
                     )}
@@ -235,8 +169,8 @@ export default function ChatPanel() {
         ))}
         {loading && (
           <div className="chat-msg chat-msg-assistant">
-            <div className="chat-msg-label">{t.assistant}</div>
-            <div className="chat-msg-content chat-loading">{t.thinking}</div>
+            <div className="chat-msg-label">AI 助手</div>
+            <div className="chat-msg-content chat-loading">思考中...</div>
           </div>
         )}
         <div ref={bottomRef} />
@@ -245,7 +179,7 @@ export default function ChatPanel() {
       <div className="chat-input-bar">
         {messages.length > 0 && (
           <div className="chat-quick-row">
-            {t.quickQuestions.map((q) => (
+            {QUICK_QUESTIONS.map((q) => (
               <button key={q} className="chat-quick-btn chat-quick-btn-sm" onClick={() => sendMessage(q)}>
                 {q}
               </button>
@@ -262,13 +196,13 @@ export default function ChatPanel() {
           <input
             className="chat-input"
             type="text"
-            placeholder={t.placeholder}
+            placeholder="输入你的问题..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             disabled={loading}
           />
           <button className="chat-send-btn" type="submit" disabled={loading || !input.trim()}>
-            {t.send}
+            发送
           </button>
         </form>
       </div>

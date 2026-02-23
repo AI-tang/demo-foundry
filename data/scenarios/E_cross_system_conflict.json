@@ -1,0 +1,17 @@
+{
+  "id": "E",
+  "name": "跨系统冲突",
+  "description": "Orders SO0042/SO0067/SO0089 have conflicting statuses across CRM, SAP, MES",
+  "inject": {
+    "orders_at_risk": [],
+    "parts_shortage": [],
+    "risk_events": [],
+    "defects": [],
+    "ecos": [],
+    "status_conflicts": [
+      {"order": "SO0042", "crm": "Confirmed", "sap": "Cancelled", "mes": "InProgress"},
+      {"order": "SO0067", "crm": "Confirmed", "sap": "Cancelled", "mes": "InProgress"},
+      {"order": "SO0089", "crm": "Confirmed", "sap": "Cancelled", "mes": "InProgress"}
+    ]
+  }
+}

@@ -10,17 +10,17 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>Control Tower</h1>
-        <span className="subtitle">Demo Foundry &mdash; Supply Chain Visibility</span>
+        <span className="subtitle">供应链可视化平台</span>
       </header>
       <nav className="tab-bar">
         {(
           [
-            ["overview", "Overview"],
-            ["orders", "Orders"],
-            ["risks", "Risks"],
-            ["bom", "BOM"],
-            ["supply", "Supply Chain"],
-            ["chat", "Chat / 对话查询"],
+            ["overview", "总览"],
+            ["orders", "订单"],
+            ["risks", "风险预警"],
+            ["bom", "物料清单"],
+            ["supply", "供应链"],
+            ["chat", "对话查询"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
           <button
