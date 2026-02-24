@@ -1,10 +1,72 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, ReactNode } from "react";
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   query?: string;
   data?: unknown;
+}
+
+/** Parse inline **bold** markers */
+function inlineBold(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, i) =>
+    p.startsWith("**") && p.endsWith("**") ? (
+      <strong key={i}>{p.slice(2, -2)}</strong>
+    ) : (
+      p
+    ),
+  );
+}
+
+/** Convert markdown content (tables, headings, bold) to JSX */
+function renderMarkdown(content: string): ReactNode[] {
+  const lines = content.split("\n");
+  const blocks: { type: "text" | "table"; lines: string[] }[] = [];
+  let cur: { type: "text" | "table"; lines: string[] } = { type: "text", lines: [] };
+
+  for (const line of lines) {
+    const isTable = line.trimStart().startsWith("|");
+    if (isTable && cur.type !== "table") {
+      if (cur.lines.length) blocks.push(cur);
+      cur = { type: "table", lines: [line] };
+    } else if (!isTable && cur.type === "table") {
+      if (cur.lines.length) blocks.push(cur);
+      cur = { type: "text", lines: [line] };
+    } else {
+      cur.lines.push(line);
+    }
+  }
+  if (cur.lines.length) blocks.push(cur);
+
+  return blocks.map((block, bi) => {
+    if (block.type === "text") {
+      const text = block.lines
+        .map((l) => (l.startsWith("### ") ? l.slice(4) : l.startsWith("## ") ? l.slice(3) : l))
+        .join("\n");
+      return <span key={bi}>{inlineBold(text)}</span>;
+    }
+    // Markdown table → HTML table
+    const isSep = (l: string) => /^\s*\|[\s\-:|]+\|\s*$/.test(l);
+    const dataLines = block.lines.filter((l) => !isSep(l));
+    if (!dataLines.length) return null;
+    const parseRow = (line: string) =>
+      line.split("|").slice(1, -1).map((c) => c.trim());
+    const headers = parseRow(dataLines[0]);
+    const rows = dataLines.slice(1).map(parseRow);
+    return (
+      <table key={bi} className="data-table chat-data-table">
+        <thead>
+          <tr>{headers.map((h, hi) => <th key={hi}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri}>{row.map((c, ci) => <td key={ci}>{c}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  });
 }
 
 const QUICK_QUESTIONS = [
@@ -140,17 +202,25 @@ export default function ChatPanel() {
         {messages.map((msg, i) => (
           <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
             <div className="chat-msg-label">{msg.role === "user" ? "你" : "AI 助手"}</div>
-            <div className="chat-msg-content">{msg.content}</div>
+            <div className="chat-msg-content">{renderMarkdown(msg.content)}</div>
             {msg.query && (
               <div className="chat-details">
                 <button
                   className="chat-toggle-btn"
-                  onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
+                  onClick={() => {
+                    const next = expandedIdx === i ? null : i;
+                    setExpandedIdx(next);
+                    if (next !== null) {
+                      setTimeout(() => {
+                        document.getElementById(`chat-detail-${i}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                      }, 50);
+                    }
+                  }}
                 >
-                  {expandedIdx === i ? "收起查询详情" : "查看查询详情"}
+                  {expandedIdx === i ? "▾ 收起查询详情" : "▸ 查看查询详情"}
                 </button>
                 {expandedIdx === i && (
-                  <div className="chat-detail-body">
+                  <div className="chat-detail-body" id={`chat-detail-${i}`}>
                     <div className="chat-query-section">
                       <strong>GraphQL 查询:</strong>
                       <pre className="chat-query-code">{msg.query}</pre>

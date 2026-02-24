@@ -107,6 +107,10 @@ Example mappings:
 16. "S1 的影响范围" / "Blast radius of supplier S1"
     Query: { blastRadius(supplierId: "S1") { impactedOrders { id name type } impactedParts { id name type } impactedFactories { id name type } paths { from relation to } } }
 
+17. "P2B 涨价了吗 / 替代报价" / "Price info and alternatives for P2B"
+    Query: { parts(where: { id: "P2B" }) { id name suppliedBy { id name alternativeTo { id name } } } }
+    Note: For detailed price comparison, scoring, and alternative quotes, use rfqCandidates(partId:"P2B") instead of raw part queries.
+
 IMPORTANT: For custom @cypher queries (ordersAtRisk, missingParts, lineStopForecast, traceQuality, ecoImpact, reconcile), ONLY request scalar fields returned by the Cypher RETURN clause. Do NOT request nested relationship fields — they will fail.
 
 Sourcing Queries (Sprint 4):
@@ -340,8 +344,8 @@ const SOURCING_INTENT_PROMPT = {
   zh: `你是供应链采购寻源意图检测器。分析用户消息，判断是否属于以下采购寻源场景。
 
 支持的寻源操作：
-1. RFQ_CANDIDATES — 用户想做RFQ、寻源评分、供应商候选排序、供应商评分卡
-   关键词：RFQ、做RFQ、寻源、候选、评分、排序、供应商评分卡、交期优先、成本优先、风险优先
+1. RFQ_CANDIDATES — 用户想做RFQ、寻源评分、供应商候选排序、供应商评分卡、查询报价、价格对比、替代报价、涨价分析
+   关键词：RFQ、做RFQ、寻源、候选、评分、排序、供应商评分卡、交期优先、成本优先、风险优先、报价、涨价、价格、替代报价、比价、询价
 2. SINGLE_SOURCE — 用户想查找单一来源/瓶颈件/关键件
    关键词：单一来源、瓶颈件、关键件、single source
 3. CONSOLIDATE_PO — 用户想合并采购、MOQ分摊、分配方案
@@ -366,8 +370,8 @@ const SOURCING_INTENT_PROMPT = {
   en: `You are a supply chain sourcing intent detector. Analyze the user's message.
 
 Supported sourcing actions:
-1. RFQ_CANDIDATES — user wants RFQ candidate scoring, supplier ranking, scorecard
-   Keywords: RFQ, candidates, sourcing, ranking, scorecard, delivery-first, cost-first, resilience-first
+1. RFQ_CANDIDATES — user wants RFQ candidate scoring, supplier ranking, scorecard, price comparison, alternative quotes, price analysis
+   Keywords: RFQ, candidates, sourcing, ranking, scorecard, delivery-first, cost-first, resilience-first, quote, price, alternative quote, price increase, compare prices
 2. SINGLE_SOURCE — user wants to find single-source / bottleneck parts
    Keywords: single source, sole source, bottleneck, critical parts
 3. CONSOLIDATE_PO — user wants MOQ consolidation / allocation plan
