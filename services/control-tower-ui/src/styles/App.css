@@ -560,3 +560,230 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* ── Sourcing Panel ── */
+.sourcing-panel {
+  max-width: 1200px;
+}
+
+.sourcing-sub-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--border);
+}
+
+.sub-tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 10px 18px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.sub-tab:hover {
+  color: var(--text);
+}
+
+.sub-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Sourcing form */
+.sourcing-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+
+.sourcing-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sourcing-form input,
+.sourcing-form select {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text);
+  background: #fff;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.sourcing-form input:focus,
+.sourcing-form select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 153, 153, 0.12);
+}
+
+.sourcing-submit {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 8px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.sourcing-submit:hover:not(:disabled) {
+  background: var(--accent-dark);
+}
+
+.sourcing-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Score bar */
+.score-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+
+.score-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+.score-label {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* RFQ hard-fail row */
+.row-hard-fail td {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.row-hard-fail td:first-child,
+.row-hard-fail td:last-child {
+  text-decoration: none;
+  opacity: 1;
+}
+
+/* Explanation list & action tags */
+.explain-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.action-tags {
+  margin-top: 4px;
+}
+
+/* Single-source cards */
+.ss-card {
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.ss-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.ss-critical {
+  border-left: 4px solid var(--danger);
+}
+
+.ss-moderate {
+  border-left: 4px solid var(--warning);
+}
+
+.badge-warning {
+  background: rgba(230, 138, 0, 0.1);
+  color: var(--warning);
+}
+
+.ss-risk-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.ss-recommendation {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-dark);
+}
+
+.ss-supplier-table {
+  margin-top: 12px;
+}
+
+/* Consolidation summary grid */
+.consolidation-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.summary-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Explanation box */
+.explanation-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 16px;
+  line-height: 1.6;
+}

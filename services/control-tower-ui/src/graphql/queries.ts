@@ -94,3 +94,71 @@ export const GET_SUPPLY_CHAIN = gql`
     }
   }
 `;
+
+export const GET_RFQ_CANDIDATES = gql`
+  query GetRfqCandidates($partId: String!, $qty: Int, $objective: String) {
+    rfqCandidates(partId: $partId, qty: $qty, objective: $objective) {
+      partId
+      qty
+      objective
+      candidates {
+        rank
+        supplierId
+        supplierName
+        totalScore
+        breakdown {
+          lead
+          cost
+          risk
+          lane
+          penalties
+        }
+        explanations
+        recommendedActions
+        hardFail
+        hardFailReason
+      }
+    }
+  }
+`;
+
+export const GET_SINGLE_SOURCE_PARTS = gql`
+  query GetSingleSourceParts($threshold: Int) {
+    singleSourceParts(threshold: $threshold) {
+      parts {
+        partId
+        partName
+        supplierCount
+        riskExplanation
+        recommendation
+        suppliers {
+          supplierId
+          name
+          qualification
+          approved
+        }
+      }
+    }
+  }
+`;
+
+export const GET_CONSOLIDATE_PO = gql`
+  query GetConsolidatePO($partId: String!, $horizonDays: Int, $policy: String) {
+    consolidatePO(partId: $partId, horizonDays: $horizonDays, policy: $policy) {
+      partId
+      totalDemand
+      consolidatedQty
+      supplierId
+      supplierName
+      moq
+      unitPrice
+      explanation
+      allocations {
+        orderId
+        qty
+        needByDate
+        priority
+      }
+    }
+  }
+`;

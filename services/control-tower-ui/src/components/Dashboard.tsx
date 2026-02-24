@@ -4,9 +4,10 @@ import BOMTree from "./BOMTree";
 import SupplyChainMap from "./SupplyChainMap";
 import SystemStatusGrid from "./SystemStatusGrid";
 import ChatPanel from "./ChatPanel";
+import SourcingPanel from "./SourcingPanel";
 
 interface Props {
-  tab: "overview" | "orders" | "risks" | "bom" | "supply" | "chat";
+  tab: "overview" | "orders" | "risks" | "bom" | "supply" | "sourcing" | "chat";
 }
 
 export default function Dashboard({ tab }: Props) {
@@ -36,6 +37,8 @@ export default function Dashboard({ tab }: Props) {
       return <BOMTree />;
     case "supply":
       return <SupplyChainMap />;
+    case "sourcing":
+      return <SourcingPanel />;
     case "chat":
       return <ChatPanel />;
   }

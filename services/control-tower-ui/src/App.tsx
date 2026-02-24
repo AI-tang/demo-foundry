@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Dashboard from "./components/Dashboard";
 
-type Tab = "overview" | "orders" | "risks" | "bom" | "supply" | "chat";
+type Tab = "overview" | "orders" | "risks" | "bom" | "supply" | "sourcing" | "chat";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
@@ -20,6 +20,7 @@ export default function App() {
             ["risks", "风险预警"],
             ["bom", "物料清单"],
             ["supply", "供应链"],
+            ["sourcing", "采购寻源"],
             ["chat", "对话查询"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
