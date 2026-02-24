@@ -14,7 +14,12 @@ const SCHEMA_DESCRIPTION = `Available GraphQL Schema:
 
 Types:
 - Factory: id, name; relations: produces -> Product, canBackupWith -> Factory
-- Supplier: id, name; relations: supplies -> Part (priority, leadTimeDays, moq, capacity, lastPrice, qualificationLevel), alternativeTo -> Supplier, affectedBy <- RiskEvent, lanes -> TransportLane
+- Supplier: id, name; relations: supplies -> Part, alternativeTo -> Supplier, affectedBy <- RiskEvent, lanes -> TransportLane
+  IMPORTANT: The supplies/suppliedBy relationship has edge properties (priority, leadTimeDays, moq, capacity, lastPrice, qualificationLevel).
+  These properties are NOT fields on Supplier or Part. You MUST use the Connection pattern to access them:
+  suppliesConnection { edges { properties { priority leadTimeDays moq capacity lastPrice qualificationLevel } node { id name } } }
+  Similarly from Part side: suppliedByConnection { edges { properties { ... } node { id name } } }
+  NEVER put lastPrice, qualificationLevel, leadTimeDays, moq, capacity, or priority directly on Supplier or Part.
 - Part: id, name, partType; relations: components -> Part, parentOf <- Part, suppliedBy <- Supplier, inventoryLots <- InventoryLot, deliveredBy <- Shipment
   IMPORTANT: Part does NOT have producedBy. Never use producedBy on Part.
 - Product: id, name; relations: components -> Part, producedBy <- Factory, orders <- Order
@@ -111,6 +116,14 @@ Example mappings:
     Query: { parts(where: { id: "P2B" }) { id name suppliedBy { id name alternativeTo { id name } } } }
     Note: For detailed price comparison, scoring, and alternative quotes, use rfqCandidates(partId:"P2B") instead of raw part queries.
 
+18. "S1 供应 P1A 的交期和价格" / "S1 lead time and price for P1A" / "供应商交期可信度"
+    Query: { suppliers(where: { id: "S1" }) { id name suppliesConnection { edges { properties { leadTimeDays lastPrice priority moq capacity qualificationLevel } node { id name } } } } }
+    Note: MUST use suppliesConnection (NOT supplies) to access edge properties like leadTimeDays, lastPrice, etc.
+
+19. "P1A 的供应商报价对比" / "Compare supplier quotes for P1A"
+    Query: { parts(where: { id: "P1A" }) { id name suppliedByConnection { edges { properties { leadTimeDays lastPrice priority moq capacity qualificationLevel } node { id name } } } } }
+    Note: Use suppliedByConnection from Part side to see all suppliers with their edge properties.
+
 IMPORTANT: For custom @cypher queries (ordersAtRisk, missingParts, lineStopForecast, traceQuality, ecoImpact, reconcile), ONLY request scalar fields returned by the Cypher RETURN clause. Do NOT request nested relationship fields — they will fail.
 
 Sourcing Queries (Sprint 4):
@@ -153,6 +166,21 @@ const ERROR_MESSAGES = {
 };
 
 export type Lang = "zh" | "en";
+
+export type HistoryMessage = { role: "user" | "assistant"; content: string };
+
+function buildMessages(
+  systemPrompt: string,
+  history: HistoryMessage[],
+  userMessage: string,
+): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  const recent = history.slice(-10);
+  return [
+    { role: "system" as const, content: systemPrompt },
+    ...recent.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    { role: "user" as const, content: userMessage },
+  ];
+}
 
 // ────────────────────────────────────────────────────────────────────
 // What-if detection & slot extraction
@@ -200,13 +228,10 @@ interface WhatIfSlots {
   slots?: Record<string, string | null>;
 }
 
-async function detectWhatIf(message: string, lang: Lang): Promise<WhatIfSlots> {
+async function detectWhatIf(message: string, lang: Lang, history: HistoryMessage[] = []): Promise<WhatIfSlots> {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: WHATIF_SLOT_PROMPT[lang] },
-      { role: "user", content: message },
-    ],
+    messages: buildMessages(WHATIF_SLOT_PROMPT[lang], history, message),
     temperature: 0,
   });
   const raw = completion.choices[0]?.message?.content ?? "";
@@ -226,6 +251,7 @@ async function handleWhatIf(
   message: string,
   lang: Lang,
   whatIf: WhatIfSlots,
+  history: HistoryMessage[] = [],
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
   const slots = whatIf.slots ?? {};
@@ -320,15 +346,10 @@ async function handleWhatIf(
   }
 
   // Summarize
+  const summaryUserContent = `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "模拟结果" : "Simulation results"}:\n${JSON.stringify(data, null, 2)}`;
   const summaryCompletion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SUMMARY_PROMPTS[lang] },
-      {
-        role: "user",
-        content: `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "模拟结果" : "Simulation results"}:\n${JSON.stringify(data, null, 2)}`,
-      },
-    ],
+    messages: buildMessages(SUMMARY_PROMPTS[lang], history, summaryUserContent),
     temperature: 0.3,
   });
 
@@ -392,13 +413,10 @@ interface SourcingIntent {
   slots?: Record<string, string | number | null>;
 }
 
-async function detectSourcingIntent(message: string, lang: Lang): Promise<SourcingIntent> {
+async function detectSourcingIntent(message: string, lang: Lang, history: HistoryMessage[] = []): Promise<SourcingIntent> {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SOURCING_INTENT_PROMPT[lang] },
-      { role: "user", content: message },
-    ],
+    messages: buildMessages(SOURCING_INTENT_PROMPT[lang], history, message),
     temperature: 0,
   });
   const raw = completion.choices[0]?.message?.content ?? "";
@@ -414,6 +432,7 @@ async function handleSourcingIntent(
   message: string,
   lang: Lang,
   intent: SourcingIntent,
+  history: HistoryMessage[] = [],
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
   const slots = intent.slots ?? {};
@@ -510,15 +529,10 @@ async function handleSourcingIntent(
   }
 
   // Summarize
+  const summaryUserContent = `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "寻源分析结果" : "Sourcing analysis results"}:\n${JSON.stringify(data, null, 2)}`;
   const summaryCompletion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SUMMARY_PROMPTS[lang] },
-      {
-        role: "user",
-        content: `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "寻源分析结果" : "Sourcing analysis results"}:\n${JSON.stringify(data, null, 2)}`,
-      },
-    ],
+    messages: buildMessages(SUMMARY_PROMPTS[lang], history, summaryUserContent),
     temperature: 0.3,
   });
 
@@ -567,13 +581,10 @@ interface ActionIntent {
   slots?: Record<string, string | number | null>;
 }
 
-async function detectActionIntent(message: string, lang: Lang): Promise<ActionIntent> {
+async function detectActionIntent(message: string, lang: Lang, history: HistoryMessage[] = []): Promise<ActionIntent> {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: ACTION_INTENT_PROMPT[lang] },
-      { role: "user", content: message },
-    ],
+    messages: buildMessages(ACTION_INTENT_PROMPT[lang], history, message),
     temperature: 0,
   });
   const raw = completion.choices[0]?.message?.content ?? "";
@@ -589,6 +600,7 @@ async function handleActionIntent(
   message: string,
   lang: Lang,
   intent: ActionIntent,
+  history: HistoryMessage[] = [],
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
   const slots = intent.slots ?? {};
@@ -629,15 +641,10 @@ async function handleActionIntent(
   }
 
   // Summarize
+  const summaryUserContent = `${lang === "zh" ? "用户请求" : "User request"}: ${message}\n\n${lang === "zh" ? "执行结果" : "Execution result"}:\n${JSON.stringify(data, null, 2)}`;
   const summaryCompletion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SUMMARY_PROMPTS[lang] },
-      {
-        role: "user",
-        content: `${lang === "zh" ? "用户请求" : "User request"}: ${message}\n\n${lang === "zh" ? "执行结果" : "Execution result"}:\n${JSON.stringify(data, null, 2)}`,
-      },
-    ],
+    messages: buildMessages(SUMMARY_PROMPTS[lang], history, summaryUserContent),
     temperature: 0.3,
   });
 
@@ -652,34 +659,32 @@ async function handleActionIntent(
 export async function handleChat(
   message: string,
   lang: Lang = "zh",
+  history: HistoryMessage[] = [],
 ): Promise<{ answer: string; query: string; data: unknown }> {
   const errors = ERROR_MESSAGES[lang];
 
   // Step 0a: Detect sourcing intent (RFQ / single-source / MOQ consolidation)
-  const sourcingIntent = await detectSourcingIntent(message, lang);
+  const sourcingIntent = await detectSourcingIntent(message, lang, history);
   if (sourcingIntent.isSourcing && sourcingIntent.type) {
-    return handleSourcingIntent(message, lang, sourcingIntent);
+    return handleSourcingIntent(message, lang, sourcingIntent, history);
   }
 
   // Step 0b: Detect action intent (CREATE_PO / EXPEDITE_SHIPMENT)
-  const actionIntent = await detectActionIntent(message, lang);
+  const actionIntent = await detectActionIntent(message, lang, history);
   if (actionIntent.isAction && actionIntent.action) {
-    return handleActionIntent(message, lang, actionIntent);
+    return handleActionIntent(message, lang, actionIntent, history);
   }
 
   // Step 0c: Detect what-if intent
-  const whatIf = await detectWhatIf(message, lang);
+  const whatIf = await detectWhatIf(message, lang, history);
   if (whatIf.isWhatIf && whatIf.type) {
-    return handleWhatIf(message, lang, whatIf);
+    return handleWhatIf(message, lang, whatIf, history);
   }
 
   // Step 1: Convert natural language to GraphQL query
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SYSTEM_PROMPTS[lang] },
-      { role: "user", content: message },
-    ],
+    messages: buildMessages(SYSTEM_PROMPTS[lang], history, message),
     temperature: 0,
   });
 
@@ -730,15 +735,10 @@ export async function handleChat(
   }
 
   // Step 3: Generate natural language summary
+  const summaryUserContent = `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "查询结果" : "Query results"}:\n${JSON.stringify(data, null, 2)}`;
   const summaryCompletion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SUMMARY_PROMPTS[lang] },
-      {
-        role: "user",
-        content: `${lang === "zh" ? "用户问题" : "User question"}: ${message}\n\n${lang === "zh" ? "查询结果" : "Query results"}:\n${JSON.stringify(data, null, 2)}`,
-      },
-    ],
+    messages: buildMessages(SUMMARY_PROMPTS[lang], history, summaryUserContent),
     temperature: 0.3,
   });
 

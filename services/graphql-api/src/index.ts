@@ -8,7 +8,7 @@ import driver from "./neo4j.js";
 import { typeDefs } from "./schema.js";
 import { simulationTypeDefs, simulationResolvers } from "./simulation.js";
 import { sourcingTypeDefs, sourcingResolvers } from "./sourcing.js";
-import { handleChat, type Lang } from "./chat.js";
+import { handleChat, type Lang, type HistoryMessage } from "./chat.js";
 
 const PORT = parseInt(process.env.PORT ?? "4000", 10);
 
@@ -43,14 +43,15 @@ async function main() {
   app.use("/graphql", expressMiddleware(server));
 
   app.post("/chat", async (req, res) => {
-    const { message, lang } = req.body;
+    const { message, lang, history } = req.body;
     if (!message || typeof message !== "string") {
       res.status(400).json({ error: "message is required" });
       return;
     }
     const resolvedLang: Lang = lang === "en" ? "en" : "zh";
+    const resolvedHistory: HistoryMessage[] = Array.isArray(history) ? history : [];
     try {
-      const result = await handleChat(message, resolvedLang);
+      const result = await handleChat(message, resolvedLang, resolvedHistory);
       res.json(result);
     } catch (err) {
       console.error("Chat error:", err);

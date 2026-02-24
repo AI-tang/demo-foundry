@@ -100,10 +100,15 @@ export default function ChatPanel() {
     setLoading(true);
 
     try {
+      // Build conversation history from existing messages (last 10, role+content only)
+      const history = messages
+        .map((m) => ({ role: m.role, content: m.content }))
+        .slice(-10);
+
       const res = await fetch(CHAT_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, lang: "zh" }),
+        body: JSON.stringify({ message: text, lang: "zh", history }),
       });
 
       if (!res.ok) {
